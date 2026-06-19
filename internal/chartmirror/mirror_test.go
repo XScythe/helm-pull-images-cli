@@ -80,7 +80,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}}, nil
 	}
-	h.runner.generatePushManifest = func(specs []mirror.ArchiveSpec) (string, error) {
+	h.runner.writePushManifest = func(outputDir string, specs []mirror.ArchiveSpec) error {
 		calls = append(calls, "manifest")
 		want := []mirror.ArchiveSpec{{
 			Image:     "quay.io/example/api:v1",
@@ -88,9 +88,10 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}}
 		if got := specs; !reflect.DeepEqual(got, want) {
-			t.Fatalf("generatePushManifest() specs = %v, want %v", got, want)
+			t.Fatalf("writePushManifest() specs = %v, want %v", got, want)
 		}
-		return "{\n  \"images\": []\n}\n", nil
+		manifestPath := filepath.Join(outputDir, mirror.PushManifestFileName())
+		return os.WriteFile(manifestPath, []byte("{\n  \"images\": []\n}\n"), 0o644)
 	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
 		calls = append(calls, "copy")

@@ -15,9 +15,11 @@ import (
 func TestPushImagesUsesManifestDigests(t *testing.T) {
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
+	originalResolveExec := resolveExecutablePath
 	defer func() {
 		copyImageToRegistry = original
 		loadOCILayout = originalLoadLayout
+		resolveExecutablePath = originalResolveExec
 	}()
 
 	var calls []string
@@ -27,6 +29,9 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 	}
 	loadOCILayout = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
+	}
+	resolveExecutablePath = func() (string, error) {
+		return "/unused/helper", nil
 	}
 
 	dir := t.TempDir()
@@ -69,6 +74,57 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("PushImages() missing calls: %v", want)
+	}
+}
+
+func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
+	original := copyImageToRegistry
+	originalLoadLayout := loadOCILayout
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		copyImageToRegistry = original
+		loadOCILayout = originalLoadLayout
+		resolveExecutablePath = originalResolveExec
+	}()
+
+	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+		return nil
+	}
+
+	baseDir := t.TempDir()
+	helperDir := filepath.Join(baseDir, "helper")
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	resolveExecutablePath = func() (string, error) {
+		return filepath.Join(helperDir, "push_images"), nil
+	}
+
+	writtenLayoutPath := ""
+	loadOCILayout = func(path string) (layout.Path, error) {
+		writtenLayoutPath = path
+		return layout.Path(path), nil
+	}
+
+	manifest, err := GeneratePushManifest([]ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}})
+	if err != nil {
+		t.Fatalf("GeneratePushManifest() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(helperDir, PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := PushImages(context.Background(), "registry.local:5000", "", 2); err != nil {
+		t.Fatalf("PushImages() error = %v", err)
+	}
+
+	wantLayoutPath := filepath.Join(helperDir, OCILayoutDirName())
+	if writtenLayoutPath != wantLayoutPath {
+		t.Fatalf("layout path = %q, want %q", writtenLayoutPath, wantLayoutPath)
 	}
 }
 

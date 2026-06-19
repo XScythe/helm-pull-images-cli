@@ -7,10 +7,13 @@ This repository is a Go CLI for rendering Helm charts, extracting referenced ima
 ## Repository layout
 
 - `main.go` boots the Cobra CLI.
-- `cmd/` contains the `pull` and `push` commands and their flag wiring.
+- `cmd/root.go` defines the root Cobra command and wires subcommands.
+- `cmd/pull.go` and `cmd/push.go` define CLI flags and invoke internal workflows.
+- `cmd/*_test.go` validates command behavior and flag-driven flows.
 - `internal/chartmirror/` renders Helm charts and coordinates the pull workflow.
 - `internal/chartimages/` extracts image references from rendered manifests.
 - `internal/mirror/` handles archive generation, push manifest creation, and push execution.
+- `internal/*/*_test.go` covers unit behavior for chart rendering, extraction, archive, and push helpers.
 - `e2e_registry_test.go` covers the registry push path end to end.
 
 ## Common commands
@@ -32,6 +35,6 @@ This repository is a Go CLI for rendering Helm charts, extracting referenced ima
 ## Notes
 
 - `pull` loads charts in-process with the Helm SDK, resolves remote chart versions from `index.yaml` when needed, and writes archives plus `push_images.json` into the output directory.
-- `push` reads `push_images.json` from `--input-dir` or from the helper binary directory by default.
+- `push` reads `push_images.json` from `--input-dir` or from the helper binary directory by default, then pushes images with bounded concurrency.
 - The CLI expects Helm chart repositories, registry access, and writable local disk at runtime.
 - Temporary output is written to the current working directory unless an explicit output directory is provided.

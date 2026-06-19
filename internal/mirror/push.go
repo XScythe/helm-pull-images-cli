@@ -22,9 +22,15 @@ var loadLayoutImage = func(layoutPath layout.Path, hash v1.Hash) (v1.Image, erro
 	return layoutPath.Image(hash)
 }
 var loadOCILayout = layout.FromPath
+var resolveExecutablePath = os.Executable
 
 func PushImages(ctx context.Context, registry, inputDir string, concurrency int) error {
-	manifest, err := ReadPushManifest(inputDir)
+	resolvedInputDir, err := resolvePushInputDir(inputDir)
+	if err != nil {
+		return err
+	}
+
+	manifest, err := ReadPushManifest(resolvedInputDir)
 	if err != nil {
 		return err
 	}
@@ -33,7 +39,7 @@ func PushImages(ctx context.Context, registry, inputDir string, concurrency int)
 	if layoutDir == "" {
 		layoutDir = OCILayoutDirName()
 	}
-	layoutPath, err := loadOCILayout(filepath.Join(inputDir, layoutDir))
+	layoutPath, err := loadOCILayout(filepath.Join(resolvedInputDir, layoutDir))
 	if err != nil {
 		return fmt.Errorf("load oci image layout: %w", err)
 	}
@@ -54,6 +60,18 @@ func PushImages(ctx context.Context, registry, inputDir string, concurrency int)
 	}
 
 	return nil
+}
+
+func resolvePushInputDir(inputDir string) (string, error) {
+	if inputDir != "" {
+		return inputDir, nil
+	}
+
+	executable, err := resolveExecutablePath()
+	if err != nil {
+		return "", fmt.Errorf("resolve executable path: %w", err)
+	}
+	return filepath.Dir(executable), nil
 }
 
 func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry string, layoutPath layout.Path, sourceImage, target, ociDigest string) error {

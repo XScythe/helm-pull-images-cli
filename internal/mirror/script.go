@@ -3,6 +3,8 @@ package mirror
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -38,6 +40,20 @@ func GeneratePushManifest(specs []ArchiveSpec) (string, error) {
 
 func PushManifestFileName() string {
 	return "push_images.json"
+}
+
+func WritePushManifest(outputDir string, specs []ArchiveSpec) error {
+	manifest, err := GeneratePushManifest(specs)
+	if err != nil {
+		return err
+	}
+
+	manifestPath := filepath.Join(outputDir, PushManifestFileName())
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		return fmt.Errorf("write push manifest: %w", err)
+	}
+
+	return nil
 }
 
 func OCILayoutDirName() string {

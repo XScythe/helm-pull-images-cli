@@ -39,13 +39,13 @@ type searchResult struct {
 }
 
 type Runner struct {
-	searchRepoVersions   func(ctx context.Context, repo, chart string) ([]searchResult, error)
-	renderManifest       func(r Runner, ctx context.Context, opts Options) (string, error)
-	defaultOutputDir     func(chart string) (string, error)
-	extractImages        func(manifest string) ([]string, error)
-	archiveImages        func(ctx context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error)
-	generatePushManifest func(specs []mirror.ArchiveSpec) (string, error)
-	copySelfExecutable   func(outputDir string) (string, error)
+	searchRepoVersions func(ctx context.Context, repo, chart string) ([]searchResult, error)
+	renderManifest     func(r Runner, ctx context.Context, opts Options) (string, error)
+	defaultOutputDir   func(chart string) (string, error)
+	extractImages      func(manifest string) ([]string, error)
+	archiveImages      func(ctx context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error)
+	writePushManifest  func(outputDir string, specs []mirror.ArchiveSpec) error
+	copySelfExecutable func(outputDir string) (string, error)
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -58,11 +58,11 @@ func NewRunner() Runner {
 		renderManifest: func(r Runner, ctx context.Context, opts Options) (string, error) {
 			return r.renderChartManifest(ctx, opts)
 		},
-		defaultOutputDir:     defaultOutputDir,
-		extractImages:        chartimages.ExtractImages,
-		archiveImages:        mirror.ArchiveImages,
-		generatePushManifest: mirror.GeneratePushManifest,
-		copySelfExecutable:   mirror.CopySelfExecutable,
+		defaultOutputDir:   defaultOutputDir,
+		extractImages:      chartimages.ExtractImages,
+		archiveImages:      mirror.ArchiveImages,
+		writePushManifest:  mirror.WritePushManifest,
+		copySelfExecutable: mirror.CopySelfExecutable,
 	}
 }
 
@@ -93,14 +93,8 @@ func (r Runner) Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	pushManifest, err := r.generatePushManifest(specs)
-	if err != nil {
+	if err := r.writePushManifest(outputDir, specs); err != nil {
 		return err
-	}
-
-	manifestPath := filepath.Join(outputDir, mirror.PushManifestFileName())
-	if err := os.WriteFile(manifestPath, []byte(pushManifest), 0o644); err != nil {
-		return fmt.Errorf("write push manifest: %w", err)
 	}
 
 	if _, err := r.copySelfExecutable(outputDir); err != nil {

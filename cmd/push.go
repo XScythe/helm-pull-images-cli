@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"helm-pull-images-cli/internal/mirror"
@@ -23,16 +21,7 @@ var pushCmd = &cobra.Command{
 			return fmt.Errorf("--registry is required")
 		}
 
-		inputDir := pushInputDir
-		if inputDir == "" {
-			dir, err := defaultPushInputDir()
-			if err != nil {
-				return err
-			}
-			inputDir = dir
-		}
-
-		return mirror.PushImages(cmd.Context(), pushRegistry, inputDir, pushConcurrency)
+		return mirror.PushImages(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency)
 	},
 }
 
@@ -40,12 +29,4 @@ func init() {
 	pushCmd.Flags().StringVar(&pushRegistry, "registry", "", "Target registry host")
 	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and OCI layout artifacts (defaults to the helper binary directory)")
 	pushCmd.Flags().IntVar(&pushConcurrency, "concurrency", 4, "Number of images to push concurrently")
-}
-
-func defaultPushInputDir() (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("resolve executable path: %w", err)
-	}
-	return filepath.Dir(executable), nil
 }

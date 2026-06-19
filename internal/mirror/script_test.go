@@ -2,6 +2,8 @@ package mirror
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -62,5 +64,31 @@ func TestGeneratePushManifestRejectsMissingDigest(t *testing.T) {
 	_, err := GeneratePushManifest([]ArchiveSpec{{Image: "busybox:1.36", Target: "library/busybox:1.36"}})
 	if err == nil {
 		t.Fatal("GeneratePushManifest() error = nil, want error")
+	}
+}
+
+func TestWritePushManifestWritesManifestFile(t *testing.T) {
+	dir := t.TempDir()
+	specs := []ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+
+	if err := WritePushManifest(dir, specs); err != nil {
+		t.Fatalf("WritePushManifest() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, PushManifestFileName()))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var manifest PushManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("WritePushManifest() wrote invalid JSON: %v", err)
+	}
+	if len(manifest.Images) != 1 || manifest.Images[0].Image != "busybox:1.36" {
+		t.Fatalf("WritePushManifest() images = %#v", manifest.Images)
 	}
 }
