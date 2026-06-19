@@ -88,7 +88,7 @@ func ensureRegistry(t *testing.T) (string, error) {
 	}
 
 	containerName := fmt.Sprintf("helm-pull-images-e2e-%d", time.Now().UnixNano())
-	cmd := exec.Command("docker", "run", "-d", "--rm", "--name", containerName, "-p", "127.0.0.1:5000:5000", "registry:2")
+	cmd := exec.Command("docker", "run", "-d", "--rm", "--name", containerName, "-p", "127.0.0.1:5000:5000", "registry:3")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker run registry: %w: %s", err, string(output))
