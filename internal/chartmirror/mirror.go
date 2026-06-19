@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -136,7 +137,7 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 		return "", err
 	}
 
-	delete(renderedFiles, "NOTES.txt")
+	removeNotesTemplates(renderedFiles)
 
 	_, manifests, err := releaseutil.SortManifests(renderedFiles, nil, releaseutil.InstallOrder)
 	if err != nil {
@@ -151,6 +152,14 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", manifest.Name, manifest.Content)
 	}
 	return out.String(), nil
+}
+
+func removeNotesTemplates(renderedFiles map[string]string) {
+	for name := range renderedFiles {
+		if path.Base(name) == "NOTES.txt" {
+			delete(renderedFiles, name)
+		}
+	}
 }
 
 func (r Runner) loadChart(ctx context.Context, opts Options) (*helmchart.Chart, error) {

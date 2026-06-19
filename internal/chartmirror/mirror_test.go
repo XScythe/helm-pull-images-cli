@@ -164,6 +164,57 @@ spec:
 	}
 }
 
+func TestRenderChartManifestIgnoresNestedNotesTemplates(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: openebs
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "configmap.yaml"), []byte(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openebs
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	subchartDir := filepath.Join(chartDir, "charts", "alloy")
+	if err := os.MkdirAll(filepath.Join(subchartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subchartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: alloy
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subchartDir, "templates", "NOTES.txt"), []byte(`This is plain text from NOTES.
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		ReleaseName: "mirror",
+		Chart:       "chart",
+		Namespace:   "default",
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "kind: ConfigMap") {
+		t.Fatalf("renderChartManifest() = %q, want rendered yaml manifest", got)
+	}
+	if strings.Contains(got, "This is plain text from NOTES.") {
+		t.Fatalf("renderChartManifest() unexpectedly included NOTES.txt content: %q", got)
+	}
+}
+
 func TestResolveChartVersionHonorsContextCancellation(t *testing.T) {
 	h := newRunnerTestHarness(t)
 	h.runner.searchRepoVersions = func(ctx context.Context, _, _ string) ([]searchResult, error) {
