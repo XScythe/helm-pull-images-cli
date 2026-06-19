@@ -1,16 +1,25 @@
 package chartmirror
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	helmchart "helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/engine"
+	"helm.sh/helm/v3/pkg/getter"
+	"helm.sh/helm/v3/pkg/releaseutil"
+	"helm.sh/helm/v3/pkg/repo"
+
 	"helm-pull-images-cli/internal/chartimages"
 	"helm-pull-images-cli/internal/mirror"
 )
@@ -18,7 +27,6 @@ import (
 type Options struct {
 	ReleaseName string
 	Chart       string
-	Local       bool
 	Repo        string
 	Version     string
 	Namespace   string
@@ -31,9 +39,8 @@ type searchResult struct {
 
 type Runner struct {
 	searchRepoVersions   func(ctx context.Context, repo, chart string) ([]searchResult, error)
-	renderChartCommand   func(ctx context.Context, args []string) (string, error)
+	renderManifest       func(r Runner, ctx context.Context, opts Options) (string, error)
 	defaultOutputDir     func(chart string) (string, error)
-	warnf                func(format string, args ...any)
 	extractImages        func(manifest string) ([]string, error)
 	archiveImages        func(ctx context.Context, images []string, outputDir string) ([]string, error)
 	generatePushManifest func(images []string) (string, error)
@@ -47,11 +54,10 @@ func Run(ctx context.Context, opts Options) error {
 func NewRunner() Runner {
 	return Runner{
 		searchRepoVersions: helmSearchRepoVersions,
-		renderChartCommand: renderChartCommand,
-		defaultOutputDir:   defaultOutputDir,
-		warnf: func(format string, args ...any) {
-			_, _ = fmt.Fprintf(os.Stderr, format+"\n", args...)
+		renderManifest: func(r Runner, ctx context.Context, opts Options) (string, error) {
+			return r.renderChartManifest(ctx, opts)
 		},
+		defaultOutputDir:     defaultOutputDir,
 		extractImages:        chartimages.ExtractImages,
 		archiveImages:        mirror.ArchiveImages,
 		generatePushManifest: mirror.GeneratePushManifest,
@@ -71,7 +77,7 @@ func (r Runner) Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	manifest, err := r.renderChart(ctx, opts)
+	manifest, err := r.renderManifest(r, ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -102,47 +108,58 @@ func (r Runner) Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
-func (r Runner) renderChart(ctx context.Context, opts Options) (string, error) {
-	args, err := r.renderChartArgs(ctx, opts)
+func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, error) {
+	chrt, err := r.loadChart(ctx, opts)
 	if err != nil {
 		return "", err
 	}
 
-	return r.renderChartCommand(ctx, args)
-}
+	if err := chartutil.ProcessDependenciesWithMerge(chrt, chartutil.Values{}); err != nil {
+		return "", err
+	}
 
-func renderChartCommand(ctx context.Context, args []string) (string, error) {
-	cmd := exec.CommandContext(ctx, "helm", args...)
-	output, err := cmd.CombinedOutput()
+	caps := chartutil.DefaultCapabilities.Copy()
+	renderValues, err := chartutil.ToRenderValuesWithSchemaValidation(
+		chrt,
+		map[string]interface{}{},
+		chartutil.ReleaseOptions{
+			Name:      opts.ReleaseName,
+			Namespace: opts.Namespace,
+			Revision:  1,
+			IsInstall: true,
+		},
+		caps,
+		false,
+	)
 	if err != nil {
-		return "", fmt.Errorf("render chart: %w: %s", err, string(output))
+		return "", err
 	}
 
-	return string(output), nil
+	renderedFiles, err := engine.Render(chrt, renderValues)
+	if err != nil {
+		return "", err
+	}
+
+	delete(renderedFiles, "NOTES.txt")
+
+	_, manifests, err := releaseutil.SortManifests(renderedFiles, nil, releaseutil.InstallOrder)
+	if err != nil {
+		return renderDebugManifest(renderedFiles), fmt.Errorf("sort manifests: %w", err)
+	}
+
+	var out bytes.Buffer
+	for _, crd := range chrt.CRDObjects() {
+		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", crd.Filename, string(crd.File.Data))
+	}
+	for _, manifest := range manifests {
+		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", manifest.Name, manifest.Content)
+	}
+	return out.String(), nil
 }
 
-func (r Runner) renderChartArgs(ctx context.Context, opts Options) ([]string, error) {
-	if ok, err := r.shouldTreatAsLocal(opts); err != nil {
-		return nil, err
-	} else if ok {
-		return []string{
-			"template",
-			opts.ReleaseName,
-			opts.Chart,
-			"--namespace",
-			opts.Namespace,
-			"--include-crds",
-		}, nil
-	}
-
-	if isBareChart(opts.Chart) {
-		if r.warnf != nil {
-			r.warnf("warning: chart %q looks like a bare name; defaulting to remote. Use an explicit path like ./%s or --local to treat it as local.", opts.Chart, opts.Chart)
-		}
-	}
-
+func (r Runner) loadChart(ctx context.Context, opts Options) (*helmchart.Chart, error) {
 	if opts.Repo == "" {
-		return nil, fmt.Errorf("--repo is required for remote charts")
+		return loader.Load(opts.Chart)
 	}
 
 	version := opts.Version
@@ -154,52 +171,31 @@ func (r Runner) renderChartArgs(ctx context.Context, opts Options) ([]string, er
 		}
 	}
 
-	return []string{
-		"template",
-		opts.ReleaseName,
-		opts.Chart,
-		"--namespace",
-		opts.Namespace,
-		"--include-crds",
-		"--repo", opts.Repo,
-		"--version", version,
-	}, nil
-}
-
-func (r Runner) shouldTreatAsLocal(opts Options) (bool, error) {
-	if opts.Local {
-		return true, nil
-	}
-
-	if !hasPathIndicator(opts.Chart) {
-		return false, nil
-	}
-
-	info, err := os.Stat(opts.Chart)
+	chartURL, err := repo.FindChartInRepoURL(opts.Repo, opts.Chart, version, "", "", "", getter.All(cli.New()))
 	if err != nil {
-		return false, fmt.Errorf("resolve local chart %q: %w", opts.Chart, err)
+		return nil, err
 	}
 
-	return info.IsDir() || info.Mode().IsRegular(), nil
-}
-
-func (r Runner) resolveChartVersion(ctx context.Context, repo, chart string) (string, error) {
-	results, err := r.searchRepoVersions(ctx, repo, chart)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chartURL, nil)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("prepare chart archive request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch chart archive: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch chart archive: %s: %s", resp.Status, string(body))
 	}
 
-	for _, result := range results {
-		if isStableVersion(result.Version) {
-			return result.Version, nil
-		}
-	}
-
-	return "", fmt.Errorf("no stable version found for %s/%s", repo, chart)
+	return loader.LoadArchive(resp.Body)
 }
 
-func helmSearchRepoVersions(ctx context.Context, repo, chart string) ([]searchResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(repo, "/")+"/index.yaml", nil)
+func helmSearchRepoVersions(ctx context.Context, repoURL, chart string) ([]searchResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(repoURL, "/")+"/index.yaml", nil)
 	if err != nil {
 		return nil, fmt.Errorf("prepare chart index request: %w", err)
 	}
@@ -217,26 +213,45 @@ func helmSearchRepoVersions(ctx context.Context, repo, chart string) ([]searchRe
 	var index struct {
 		Entries map[string][]searchResult `yaml:"entries"`
 	}
-	decoder := yaml.NewDecoder(resp.Body)
-	if err := decoder.Decode(&index); err != nil {
-		return nil, fmt.Errorf("parse chart index: %w", err)
+	if err := yaml.NewDecoder(resp.Body).Decode(&index); err != nil {
+		return nil, err
 	}
 	return index.Entries[chart], nil
 }
 
+func renderDebugManifest(files map[string]string) string {
+	var b bytes.Buffer
+	for name, content := range files {
+		if strings.TrimSpace(content) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "---\n# Source: %s\n%s\n", name, content)
+	}
+	return b.String()
+}
+
+func (r Runner) resolveChartVersion(ctx context.Context, repoURL, chart string) (string, error) {
+	search := r.searchRepoVersions
+	if search == nil {
+		search = helmSearchRepoVersions
+	}
+
+	results, err := search(ctx, repoURL, chart)
+	if err != nil {
+		return "", err
+	}
+
+	for _, result := range results {
+		if isStableVersion(result.Version) {
+			return result.Version, nil
+		}
+	}
+
+	return "", fmt.Errorf("no stable version found for %s/%s", repoURL, chart)
+}
+
 func isStableVersion(version string) bool {
 	return version != "" && !strings.Contains(version, "-")
-}
-
-func hasPathIndicator(chart string) bool {
-	return filepath.IsAbs(chart) ||
-		strings.HasPrefix(chart, "."+string(filepath.Separator)) ||
-		strings.HasPrefix(chart, ".."+string(filepath.Separator)) ||
-		strings.ContainsRune(chart, filepath.Separator)
-}
-
-func isBareChart(chart string) bool {
-	return chart != "" && !hasPathIndicator(chart)
 }
 
 func defaultOutputDir(chart string) (string, error) {

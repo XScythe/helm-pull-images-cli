@@ -9,7 +9,6 @@ import (
 
 var (
 	pullChart     string
-	pullLocal     bool
 	pullRepo      string
 	pullVersion   string
 	pullNamespace string
@@ -28,7 +27,6 @@ var pullCmd = &cobra.Command{
 		return chartmirror.Run(cmd.Context(), chartmirror.Options{
 			ReleaseName: pullRelease,
 			Chart:       pullChart,
-			Local:       pullLocal,
 			Repo:        pullRepo,
 			Version:     pullVersion,
 			Namespace:   pullNamespace,
@@ -39,7 +37,6 @@ var pullCmd = &cobra.Command{
 
 func init() {
 	pullCmd.Flags().StringVar(&pullChart, "chart", "", "Helm chart name")
-	pullCmd.Flags().BoolVar(&pullLocal, "local", false, "Treat --chart as a local chart path")
 	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL")
 	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
 	pullCmd.Flags().StringVar(&pullNamespace, "namespace", "default", "Release namespace")

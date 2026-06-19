@@ -8,8 +8,8 @@ func TestPullCommandDoesNotExposeRegistryFlag(t *testing.T) {
 	}
 }
 
-func TestPullCommandExposesLocalFlag(t *testing.T) {
-	if pullCmd.Flags().Lookup("local") == nil {
-		t.Fatalf("pull command missing local flag")
+func TestPullCommandDoesNotExposeLocalFlag(t *testing.T) {
+	if pullCmd.Flags().Lookup("local") != nil {
+		t.Fatalf("pull command unexpectedly exposes a local flag")
 	}
 }

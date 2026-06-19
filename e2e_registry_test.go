@@ -29,10 +29,6 @@ func TestRegistryE2E(t *testing.T) {
 		t.Skip("skipping registry e2e test in short mode")
 	}
 
-	if _, err := exec.LookPath("helm"); err != nil {
-		t.Skip("helm is required for the e2e registry test")
-	}
-
 	t.Log("ensuring registry")
 	containerID, err := ensureRegistry(t)
 	if err != nil {
@@ -55,7 +51,6 @@ func TestRegistryE2E(t *testing.T) {
 	t.Log("rendering chart and archiving images")
 	pullCmd := exec.Command(cliBinary, "pull",
 		"--chart", chartDir,
-		"--local",
 		"--output-dir", outputDir,
 		"--release-name", "mirror",
 		"--namespace", "default",

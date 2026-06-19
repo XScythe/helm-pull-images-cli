@@ -2,7 +2,6 @@ package chartmirror
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,80 +48,12 @@ func TestResolveChartVersionSkipsPrereleases(t *testing.T) {
 	}
 }
 
-func TestRenderChartArgsUsesLocalChartWithoutRepo(t *testing.T) {
-	testCases := []struct {
-		name     string
-		opts     Options
-		wantOmit []string
-	}{
-		{
-			name: "local path",
-			opts: Options{
-				ReleaseName: "mirror",
-				Chart:       t.TempDir(),
-				Namespace:   "default",
-				Version:     "ignored",
-			},
-			wantOmit: []string{"--repo", "--version"},
-		},
-		{
-			name: "explicit local flag",
-			opts: Options{
-				ReleaseName: "mirror",
-				Chart:       "nginx",
-				Local:       true,
-				Namespace:   "default",
-			},
-			wantOmit: []string{"--repo", "--version"},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			args, err := NewRunner().renderChartArgs(context.Background(), tc.opts)
-			if err != nil {
-				t.Fatalf("renderChartArgs() error = %v", err)
-			}
-			for _, arg := range tc.wantOmit {
-				if containsArg(args, arg) {
-					t.Fatalf("renderChartArgs() unexpectedly contained %q: %v", arg, args)
-				}
-			}
-		})
-	}
-}
-
-func TestRenderChartArgsWarnsOnBareChartAndUsesRemote(t *testing.T) {
-	h := newRunnerTestHarness(t)
-
-	args, err := h.runner.renderChartArgs(context.Background(), Options{
-		ReleaseName: "mirror",
-		Chart:       "nginx",
-		Repo:        "https://example.invalid",
-		Version:     "1.2.3",
-		Namespace:   "default",
-	})
-	if err != nil {
-		t.Fatalf("renderChartArgs() error = %v", err)
-	}
-
-	if h.warning == "" || !strings.Contains(h.warning, "defaulting to remote") {
-		t.Fatalf("renderChartArgs() warning = %q, want remote warning", h.warning)
-	}
-
-	for _, arg := range []string{"--repo", "--version"} {
-		if !containsArg(args, arg) {
-			t.Fatalf("renderChartArgs() missing %q: %v", arg, args)
-		}
-	}
-}
-
 func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 	h := newRunnerTestHarness(t)
 
 	var calls []string
-	h.runner.renderChartCommand = func(_ context.Context, args []string) (string, error) {
-		calls = append(calls, "render:"+strings.Join(args, " "))
+	h.runner.renderManifest = func(_ Runner, _ context.Context, opts Options) (string, error) {
+		calls = append(calls, "render:"+opts.Chart)
 		return "kind: ConfigMap\nmetadata:\n  name: demo\n  annotations:\n    image: quay.io/example/api:v1\n", nil
 	}
 	h.runner.extractImages = func(manifest string) ([]string, error) {
@@ -171,12 +102,51 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
 
-	if got, want := calls, []string{"render:template mirror " + chartDir + " --namespace default --include-crds", "extract", "archive", "manifest", "copy"}; !reflect.DeepEqual(got, want) {
+	if got, want := calls, []string{"render:" + chartDir, "extract", "archive", "manifest", "copy"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Runner.Run() calls = %v, want %v", got, want)
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "out", mirror.PushManifestFileName())); err != nil {
 		t.Fatalf("Runner.Run() did not write push manifest: %v", err)
+	}
+}
+
+func TestRenderChartManifestRendersLocalChart(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: quay.io/example/app:v1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		ReleaseName: "mirror",
+		Chart:       "chart",
+		Namespace:   "default",
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "quay.io/example/app:v1") {
+		t.Fatalf("renderChartManifest() = %q, want rendered image", got)
 	}
 }
 
@@ -195,20 +165,10 @@ func TestResolveChartVersionHonorsContextCancellation(t *testing.T) {
 	}
 }
 
-func containsArg(args []string, want string) bool {
-	for _, arg := range args {
-		if arg == want {
-			return true
-		}
-	}
-	return false
-}
-
 type runnerTestHarness struct {
-	t       *testing.T
-	cwd     string
-	runner  Runner
-	warning string
+	t      *testing.T
+	cwd    string
+	runner Runner
 }
 
 func newRunnerTestHarness(t *testing.T) *runnerTestHarness {
@@ -225,8 +185,5 @@ func newRunnerTestHarness(t *testing.T) *runnerTestHarness {
 	}
 
 	h := &runnerTestHarness{t: t, cwd: cwd, runner: NewRunner()}
-	h.runner.warnf = func(format string, args ...any) {
-		h.warning = fmt.Sprintf(format, args...)
-	}
 	return h
 }
