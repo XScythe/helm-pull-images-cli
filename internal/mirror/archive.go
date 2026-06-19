@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 var fetchRemoteImage = remote.Image
 var writeLayout = layout.Write
+var fromLayoutPath = layout.FromPath
 var appendLayoutImage = func(path layout.Path, img v1.Image) error {
 	return path.AppendImage(img)
 }
@@ -31,9 +33,10 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 		return nil, err
 	}
 
-	layoutPath, err := writeLayout(filepath.Join(outputDir, OCILayoutDirName()), empty.Index)
+	layoutRoot := filepath.Join(outputDir, OCILayoutDirName())
+	layoutPath, createdLayout, err := openOrCreateLayout(layoutRoot)
 	if err != nil {
-		return nil, fmt.Errorf("create oci image layout: %w", err)
+		return nil, err
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -53,11 +56,36 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 	}
 
 	if err := group.Wait(); err != nil {
-		_ = os.RemoveAll(string(layoutPath))
+		if createdLayout {
+			_ = os.RemoveAll(layoutRoot)
+		}
 		return nil, err
 	}
 
 	return specs, nil
+}
+
+func openOrCreateLayout(layoutRoot string) (layout.Path, bool, error) {
+	info, err := os.Stat(layoutRoot)
+	if err == nil {
+		if !info.IsDir() {
+			return "", false, fmt.Errorf("open oci image layout: %s is not a directory", layoutRoot)
+		}
+		path, openErr := fromLayoutPath(layoutRoot)
+		if openErr != nil {
+			return "", false, fmt.Errorf("open oci image layout: %w", openErr)
+		}
+		return path, false, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("stat oci image layout: %w", err)
+	}
+
+	path, createErr := writeLayout(layoutRoot, empty.Index)
+	if createErr != nil {
+		return "", false, fmt.Errorf("create oci image layout: %w", createErr)
+	}
+	return path, true, nil
 }
 
 func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string, layoutPath layout.Path, writeMu *sync.Mutex) (string, error) {

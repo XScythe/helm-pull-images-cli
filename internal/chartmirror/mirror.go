@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 	helmchart "helm.sh/helm/v3/pkg/chart"
@@ -35,26 +36,52 @@ type Options struct {
 	Concurrency int
 }
 
+type PullResult struct {
+	OutputDir    string
+	Images       []string
+	ArchiveSpecs []mirror.ArchiveSpec
+	ManifestPath string
+}
+
+type PullPipeline interface {
+	Execute(ctx context.Context, opts Options) (PullResult, error)
+}
+
 type searchResult struct {
 	Version string `yaml:"version"`
 }
+
+type chartSourceAdapter func(ctx context.Context, opts Options) (*helmchart.Chart, error)
 
 type Runner struct {
 	searchRepoVersions func(ctx context.Context, repo, chart string) ([]searchResult, error)
 	renderManifest     func(r Runner, ctx context.Context, opts Options) (string, error)
 	defaultOutputDir   func(chart string) (string, error)
+	extractChartImages func(ctx context.Context, opts Options) ([]string, error)
 	extractImages      func(manifest string) ([]string, error)
 	archiveImages      func(ctx context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error)
 	writePushManifest  func(outputDir string, specs []mirror.ArchiveSpec) error
 	copySelfExecutable func(outputDir string) (string, error)
+	localChartSource   chartSourceAdapter
+	helmChartSource    chartSourceAdapter
+	chartCache         *loadedCharts
+}
+
+type loadedCharts struct {
+	mu     sync.Mutex
+	byOpts map[string]*helmchart.Chart
 }
 
 func Run(ctx context.Context, opts Options) error {
 	return NewRunner().Run(ctx, opts)
 }
 
+func NewPullPipeline() PullPipeline {
+	return NewRunner()
+}
+
 func NewRunner() Runner {
-	return Runner{
+	r := Runner{
 		searchRepoVersions: helmSearchRepoVersions,
 		renderManifest: func(r Runner, ctx context.Context, opts Options) (string, error) {
 			return r.renderChartManifest(ctx, opts)
@@ -64,45 +91,108 @@ func NewRunner() Runner {
 		archiveImages:      mirror.ArchiveImages,
 		writePushManifest:  mirror.WritePushManifest,
 		copySelfExecutable: mirror.CopySelfExecutable,
+		chartCache:         &loadedCharts{byOpts: make(map[string]*helmchart.Chart)},
 	}
+	r.extractChartImages = func(ctx context.Context, opts Options) ([]string, error) {
+		return r.extractChartAnnotationImages(ctx, opts)
+	}
+	r.localChartSource = localChartSource
+	r.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		return loadHelmRepoChart(ctx, opts, func(ctx context.Context, repoURL, chart string) (string, error) {
+			return r.resolveChartVersion(ctx, repoURL, chart)
+		})
+	}
+	return r
 }
 
 func (r Runner) Run(ctx context.Context, opts Options) error {
+	_, err := r.Execute(ctx, opts)
+	return err
+}
+
+func (r Runner) Execute(ctx context.Context, opts Options) (PullResult, error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	outputDir := opts.OutputDir
 	if outputDir == "" {
 		dir, err := r.defaultOutputDir(opts.Chart)
 		if err != nil {
-			return err
+			return PullResult{}, err
 		}
 		outputDir = dir
 	} else if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
+		return PullResult{}, fmt.Errorf("create output dir: %w", err)
 	}
 
-	manifest, err := r.renderManifest(r, ctx, opts)
+	chartImages, err := r.extractChartImages(runCtx, opts)
 	if err != nil {
-		return err
+		return PullResult{}, err
+	}
+
+	type archiveResult struct {
+		specs []mirror.ArchiveSpec
+		err   error
+	}
+	var chartArchiveResult chan archiveResult
+	fail := func(err error) (PullResult, error) {
+		cancel()
+		if chartArchiveResult != nil {
+			<-chartArchiveResult
+		}
+		return PullResult{}, err
+	}
+	if len(chartImages) > 0 {
+		chartArchiveResult = make(chan archiveResult, 1)
+		go func(images []string) {
+			specs, archiveErr := r.archiveImages(runCtx, images, outputDir, opts.Concurrency)
+			chartArchiveResult <- archiveResult{specs: specs, err: archiveErr}
+		}(append([]string{}, chartImages...))
+	}
+
+	manifest, err := r.renderManifest(r, runCtx, opts)
+	if err != nil {
+		return fail(err)
 	}
 
 	images, err := r.extractImages(manifest)
 	if err != nil {
-		return err
+		return fail(err)
+	}
+	allImages := appendUnique(chartImages, images...)
+	remainingImages := subtractImages(allImages, chartImages)
+
+	var specs []mirror.ArchiveSpec
+	if chartArchiveResult != nil {
+		result := <-chartArchiveResult
+		if result.err != nil {
+			return PullResult{}, result.err
+		}
+		specs = append(specs, result.specs...)
 	}
 
-	specs, err := r.archiveImages(ctx, images, outputDir, opts.Concurrency)
-	if err != nil {
-		return err
+	if len(remainingImages) > 0 {
+		remainingSpecs, archiveErr := r.archiveImages(runCtx, remainingImages, outputDir, opts.Concurrency)
+		if archiveErr != nil {
+			return PullResult{}, archiveErr
+		}
+		specs = append(specs, remainingSpecs...)
 	}
 
 	if err := r.writePushManifest(outputDir, specs); err != nil {
-		return err
+		return PullResult{}, err
 	}
 
 	if _, err := r.copySelfExecutable(outputDir); err != nil {
-		return err
+		return PullResult{}, err
 	}
 
-	return nil
+	return PullResult{
+		OutputDir:    outputDir,
+		Images:       allImages,
+		ArchiveSpecs: specs,
+		ManifestPath: filepath.Join(outputDir, mirror.PushManifestFileName()),
+	}, nil
 }
 
 func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, error) {
@@ -139,7 +229,7 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 
 	removeNotesTemplates(renderedFiles)
 
-	_, manifests, err := releaseutil.SortManifests(renderedFiles, nil, releaseutil.InstallOrder)
+	hooks, manifests, err := releaseutil.SortManifests(renderedFiles, nil, releaseutil.InstallOrder)
 	if err != nil {
 		return renderDebugManifest(renderedFiles), fmt.Errorf("sort manifests: %w", err)
 	}
@@ -147,6 +237,9 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 	var out bytes.Buffer
 	for _, crd := range chrt.CRDObjects() {
 		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", crd.Filename, string(crd.File.Data))
+	}
+	for _, hook := range hooks {
+		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", hook.Path, hook.Manifest)
 	}
 	for _, manifest := range manifests {
 		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", manifest.Name, manifest.Content)
@@ -162,41 +255,37 @@ func removeNotesTemplates(renderedFiles map[string]string) {
 	}
 }
 
-func (r Runner) loadChart(ctx context.Context, opts Options) (*helmchart.Chart, error) {
-	if opts.Repo == "" {
-		return loader.Load(opts.Chart)
+func (r Runner) extractChartAnnotationImages(ctx context.Context, opts Options) ([]string, error) {
+	if opts.Chart == "" {
+		return nil, nil
 	}
 
-	version := opts.Version
-	if version == "" {
-		var err error
-		version, err = r.resolveChartVersion(ctx, opts.Repo, opts.Chart)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	chartURL, err := repo.FindChartInRepoURL(opts.Repo, opts.Chart, version, "", "", "", getter.All(cli.New()))
+	chrt, err := r.loadChart(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
+	return chartimages.ExtractChartAnnotationImages(chrt.Metadata.Annotations)
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chartURL, nil)
+func (r Runner) loadChart(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	if cached := r.getCachedChart(opts); cached != nil {
+		return cached, nil
+	}
+
+	if opts.Repo == "" {
+		chrt, err := r.localChartSource(ctx, opts)
+		if err != nil {
+			return nil, err
+		}
+		r.setCachedChart(opts, chrt)
+		return chrt, nil
+	}
+	chrt, err := r.helmChartSource(ctx, opts)
 	if err != nil {
-		return nil, fmt.Errorf("prepare chart archive request: %w", err)
+		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch chart archive: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("fetch chart archive: %s: %s", resp.Status, string(body))
-	}
-
-	return loader.LoadArchive(resp.Body)
+	r.setCachedChart(opts, chrt)
+	return chrt, nil
 }
 
 func helmSearchRepoVersions(ctx context.Context, repoURL, chart string) ([]searchResult, error) {
@@ -279,4 +368,99 @@ func sanitizeName(value string) string {
 		return "chart"
 	}
 	return value
+}
+
+func appendUnique(current []string, values ...string) []string {
+	seen := make(map[string]struct{}, len(current)+len(values))
+	for _, value := range current {
+		seen[value] = struct{}{}
+	}
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		current = append(current, value)
+	}
+	return current
+}
+
+func subtractImages(images []string, remove []string) []string {
+	if len(remove) == 0 {
+		return append([]string{}, images...)
+	}
+	excluded := make(map[string]struct{}, len(remove))
+	for _, image := range remove {
+		excluded[image] = struct{}{}
+	}
+
+	out := make([]string, 0, len(images))
+	for _, image := range images {
+		if _, ok := excluded[image]; ok {
+			continue
+		}
+		out = append(out, image)
+	}
+	return out
+}
+
+func (r Runner) getCachedChart(opts Options) *helmchart.Chart {
+	if r.chartCache == nil {
+		return nil
+	}
+	key := cacheKeyForOptions(opts)
+	r.chartCache.mu.Lock()
+	defer r.chartCache.mu.Unlock()
+	return r.chartCache.byOpts[key]
+}
+
+func (r Runner) setCachedChart(opts Options, chrt *helmchart.Chart) {
+	if r.chartCache == nil || chrt == nil {
+		return
+	}
+	key := cacheKeyForOptions(opts)
+	r.chartCache.mu.Lock()
+	r.chartCache.byOpts[key] = chrt
+	r.chartCache.mu.Unlock()
+}
+
+func cacheKeyForOptions(opts Options) string {
+	return strings.Join([]string{opts.Repo, opts.Chart, opts.Version}, "\x00")
+}
+
+func localChartSource(_ context.Context, opts Options) (*helmchart.Chart, error) {
+	return loader.Load(opts.Chart)
+}
+
+func loadHelmRepoChart(ctx context.Context, opts Options, resolveVersion func(ctx context.Context, repoURL, chart string) (string, error)) (*helmchart.Chart, error) {
+	version := opts.Version
+	if version == "" {
+		var err error
+		version, err = resolveVersion(ctx, opts.Repo, opts.Chart)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	chartURL, err := repo.FindChartInRepoURL(opts.Repo, opts.Chart, version, "", "", "", getter.All(cli.New()))
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chartURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("prepare chart archive request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch chart archive: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch chart archive: %s: %s", resp.Status, string(body))
+	}
+
+	return loader.LoadArchive(resp.Body)
 }

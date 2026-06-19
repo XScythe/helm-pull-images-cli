@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -15,10 +16,12 @@ import (
 func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 	originalFetch := fetchRemoteImage
 	originalWriteLayout := writeLayout
+	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
+		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
 	}()
 
@@ -32,6 +35,9 @@ func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 	var layoutPath string
 	writeLayout = func(path string, _ v1.ImageIndex) (layout.Path, error) {
 		layoutPath = path
+		return layout.Path(path), nil
+	}
+	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
 
@@ -63,12 +69,17 @@ func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 func TestArchiveImagesFailsOnCopyError(t *testing.T) {
 	originalFetch := fetchRemoteImage
 	originalWriteLayout := writeLayout
+	originalFromLayout := fromLayoutPath
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
+		fromLayoutPath = originalFromLayout
 	}()
 
 	writeLayout = func(path string, _ v1.ImageIndex) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
 
@@ -85,10 +96,12 @@ func TestArchiveImagesFailsOnCopyError(t *testing.T) {
 func TestArchiveImagesSupportsDigestReferences(t *testing.T) {
 	originalFetch := fetchRemoteImage
 	originalWriteLayout := writeLayout
+	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
+		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
 	}()
 
@@ -98,6 +111,9 @@ func TestArchiveImagesSupportsDigestReferences(t *testing.T) {
 		return fakeImageWithDigest(t, "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), nil
 	}
 	writeLayout = func(path string, _ v1.ImageIndex) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error {
@@ -114,6 +130,51 @@ func TestArchiveImagesSupportsDigestReferences(t *testing.T) {
 	}
 	if specs[0].OCIDigest == "" {
 		t.Fatal("ArchiveImages() digest is empty")
+	}
+}
+
+func TestArchiveImagesAppendsToExistingLayout(t *testing.T) {
+	originalFetch := fetchRemoteImage
+	originalWriteLayout := writeLayout
+	originalFromLayout := fromLayoutPath
+	originalAppend := appendLayoutImage
+	defer func() {
+		fetchRemoteImage = originalFetch
+		writeLayout = originalWriteLayout
+		fromLayoutPath = originalFromLayout
+		appendLayoutImage = originalAppend
+	}()
+
+	fetchRemoteImage = func(ref name.Reference, _ ...remote.Option) (v1.Image, error) {
+		return fakeImageWithDigest(t, map[string]string{
+			"busybox:1.36": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}[ref.String()]), nil
+	}
+
+	writeCalled := false
+	writeLayout = func(path string, _ v1.ImageIndex) (layout.Path, error) {
+		writeCalled = true
+		return layout.Path(path), nil
+	}
+	fromLayoutPath = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	appendLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
+
+	out := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(out, OCILayoutDirName()), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	specs, err := ArchiveImages(context.Background(), []string{"busybox:1.36"}, out, 1)
+	if err != nil {
+		t.Fatalf("ArchiveImages() error = %v", err)
+	}
+	if writeCalled {
+		t.Fatal("ArchiveImages() unexpectedly created new layout for existing layout dir")
+	}
+	if len(specs) != 1 || specs[0].OCIDigest == "" {
+		t.Fatalf("ArchiveImages() specs = %#v", specs)
 	}
 }
 

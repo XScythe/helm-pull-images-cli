@@ -56,6 +56,9 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		calls = append(calls, "render:"+opts.Chart)
 		return "kind: ConfigMap\nmetadata:\n  name: demo\n  annotations:\n    image: quay.io/example/api:v1\n", nil
 	}
+	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
+		return nil, nil
+	}
 	h.runner.extractImages = func(manifest string) ([]string, error) {
 		calls = append(calls, "extract")
 		if !strings.Contains(manifest, "demo") {
@@ -122,6 +125,196 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "out", mirror.PushManifestFileName())); err != nil {
 		t.Fatalf("Runner.Run() did not write push manifest: %v", err)
+	}
+}
+
+func TestRunnerRunIncludesChartAnnotationImagesBeforeManifestImages(t *testing.T) {
+	h := newRunnerTestHarness(t)
+
+	var archiveCalls [][]string
+	h.runner.renderManifest = func(_ Runner, _ context.Context, _ Options) (string, error) {
+		return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n", nil
+	}
+	h.runner.extractImages = func(_ string) ([]string, error) {
+		return []string{
+			"quay.io/example/app:v1",
+			"quay.io/example/from-annotation:v2",
+		}, nil
+	}
+	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error) {
+		archiveCalls = append(archiveCalls, append([]string{}, images...))
+		if reflect.DeepEqual(images, []string{"quay.io/example/from-annotation:v2", "busybox:1.36"}) {
+			return []mirror.ArchiveSpec{
+				{
+					Image:     "quay.io/example/from-annotation:v2",
+					Target:    "example/from-annotation:v2",
+					OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				},
+				{
+					Image:     "busybox:1.36",
+					Target:    "library/busybox:1.36",
+					OCIDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+				},
+			}, nil
+		}
+		return []mirror.ArchiveSpec{
+			{
+				Image:     "quay.io/example/app:v1",
+				Target:    "example/app:v1",
+				OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+		}, nil
+	}
+	h.runner.writePushManifest = func(outputDir string, specs []mirror.ArchiveSpec) error {
+		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{\n  \"images\": []\n}\n"), 0o644)
+	}
+	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
+		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+	}
+
+	dir := t.TempDir()
+	chartDir := filepath.Join(dir, "chart")
+	if err := os.MkdirAll(chartDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+annotations:
+  annotation.helm.sh/images: |
+    - quay.io/example/from-annotation:v2
+    - busybox:1.36
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "noop.yaml"), []byte(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: noop
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := h.runner.Run(context.Background(), Options{
+		ReleaseName: "mirror",
+		Chart:       chartDir,
+		Namespace:   "default",
+		OutputDir:   filepath.Join(dir, "out"),
+		Concurrency: 2,
+	}); err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+
+	wantCalls := [][]string{
+		{"quay.io/example/from-annotation:v2", "busybox:1.36"},
+		{"quay.io/example/app:v1"},
+	}
+	if !reflect.DeepEqual(archiveCalls, wantCalls) {
+		t.Fatalf("Runner.Run() archive calls = %v, want %v", archiveCalls, wantCalls)
+	}
+}
+
+func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
+	h := newRunnerTestHarness(t)
+
+	var calls []string
+	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
+		calls = append(calls, "chart")
+		return nil, nil
+	}
+
+	h.runner.renderManifest = func(_ Runner, _ context.Context, _ Options) (string, error) {
+		calls = append(calls, "render")
+		return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n", nil
+	}
+	h.runner.extractImages = func(_ string) ([]string, error) {
+		calls = append(calls, "extract")
+		return []string{"busybox:1.36"}, nil
+	}
+	h.runner.archiveImages = func(_ context.Context, _ []string, _ string, _ int) ([]mirror.ArchiveSpec, error) {
+		calls = append(calls, "archive")
+		return []mirror.ArchiveSpec{{
+			Image:     "busybox:1.36",
+			Target:    "library/busybox:1.36",
+			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}, nil
+	}
+	h.runner.writePushManifest = func(outputDir string, _ []mirror.ArchiveSpec) error {
+		calls = append(calls, "manifest")
+		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{}\n"), 0o644)
+	}
+	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
+		calls = append(calls, "copy")
+		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+	}
+
+	if err := h.runner.Run(context.Background(), Options{
+		ReleaseName: "mirror",
+		Chart:       "ignored-by-stub",
+		Namespace:   "default",
+		OutputDir:   t.TempDir(),
+		Concurrency: 1,
+	}); err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+
+	want := []string{"chart", "render", "extract", "archive", "manifest", "copy"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("Runner.Run() calls = %v, want %v", calls, want)
+	}
+}
+
+func TestRunnerExecuteReturnsPullResult(t *testing.T) {
+	h := newRunnerTestHarness(t)
+
+	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
+		return []string{"busybox:1.36"}, nil
+	}
+	h.runner.renderManifest = func(_ Runner, _ context.Context, _ Options) (string, error) {
+		return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n", nil
+	}
+	h.runner.extractImages = func(_ string) ([]string, error) {
+		return nil, nil
+	}
+	h.runner.archiveImages = func(_ context.Context, images []string, _ string, _ int) ([]mirror.ArchiveSpec, error) {
+		return []mirror.ArchiveSpec{{
+			Image:     images[0],
+			Target:    "library/busybox:1.36",
+			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}, nil
+	}
+	h.runner.writePushManifest = func(outputDir string, _ []mirror.ArchiveSpec) error {
+		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{}\n"), 0o644)
+	}
+	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
+		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+	}
+
+	outDir := t.TempDir()
+	result, err := h.runner.Execute(context.Background(), Options{
+		Chart:       "ignored-by-stub",
+		Namespace:   "default",
+		OutputDir:   outDir,
+		Concurrency: 1,
+	})
+	if err != nil {
+		t.Fatalf("Runner.Execute() error = %v", err)
+	}
+
+	if result.OutputDir != outDir {
+		t.Fatalf("Runner.Execute() outputDir = %q, want %q", result.OutputDir, outDir)
+	}
+	if got, want := result.Images, []string{"busybox:1.36"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Runner.Execute() images = %v, want %v", got, want)
+	}
+	if got, want := result.ManifestPath, filepath.Join(outDir, mirror.PushManifestFileName()); got != want {
+		t.Fatalf("Runner.Execute() manifestPath = %q, want %q", got, want)
+	}
+	if len(result.ArchiveSpecs) != 1 || result.ArchiveSpecs[0].Image != "busybox:1.36" {
+		t.Fatalf("Runner.Execute() archiveSpecs = %#v", result.ArchiveSpecs)
 	}
 }
 
@@ -212,6 +405,75 @@ version: 0.1.0
 	}
 	if strings.Contains(got, "This is plain text from NOTES.") {
 		t.Fatalf("renderChartManifest() unexpectedly included NOTES.txt content: %q", got)
+	}
+}
+
+func TestRenderChartManifestIncludesHookResources(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "hook-job.yaml"), []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hook-job
+  annotations:
+    "helm.sh/hook": pre-install
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hook
+          image: quay.io/example/hook:v1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		ReleaseName: "mirror",
+		Chart:       "chart",
+		Namespace:   "default",
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "quay.io/example/hook:v1") {
+		t.Fatalf("renderChartManifest() = %q, want hook manifest image", got)
+	}
+}
+
+func TestLoadChartUsesCachedChartForSameOptions(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(chartDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: cached
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	opts := Options{Chart: "chart"}
+	if _, err := h.runner.loadChart(context.Background(), opts); err != nil {
+		t.Fatalf("loadChart() first call error = %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	if _, err := h.runner.loadChart(context.Background(), opts); err != nil {
+		t.Fatalf("loadChart() second call error = %v, want cached chart", err)
 	}
 }
 
