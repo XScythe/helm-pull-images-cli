@@ -10,45 +10,67 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"golang.org/x/sync/errgroup"
 )
 
 var copyImageToRegistry = copyImageToRegistryUsingGoContainerRegistry
-var loadTarballImage = tarball.ImageFromPath
 var writeRemoteImage = remote.Write
+var loadLayoutImage = func(layoutPath layout.Path, hash v1.Hash) (v1.Image, error) {
+	return layoutPath.Image(hash)
+}
+var loadOCILayout = layout.FromPath
 
-func PushImages(ctx context.Context, registry, inputDir string) error {
-	specs, err := ReadPushManifest(inputDir)
+func PushImages(ctx context.Context, registry, inputDir string, concurrency int) error {
+	manifest, err := ReadPushManifest(inputDir)
 	if err != nil {
 		return err
 	}
 
-	for _, spec := range specs.Images {
-		archivePath := filepath.Join(inputDir, spec.Archive)
-		if err := copyImageToRegistry(ctx, registry, archivePath, spec.Image, spec.Target); err != nil {
-			return fmt.Errorf("push %s: %w", spec.Image, err)
-		}
+	layoutDir := manifest.LayoutDir
+	if layoutDir == "" {
+		layoutDir = OCILayoutDirName()
+	}
+	layoutPath, err := loadOCILayout(filepath.Join(inputDir, layoutDir))
+	if err != nil {
+		return fmt.Errorf("load oci image layout: %w", err)
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(normalizeConcurrency(concurrency))
+	for _, spec := range manifest.Images {
+		spec := spec
+		group.Go(func() error {
+			if err := copyImageToRegistry(groupCtx, registry, layoutPath, spec.Image, spec.Target, spec.OCIDigest); err != nil {
+				return fmt.Errorf("push %s: %w", spec.Image, err)
+			}
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry, archivePath, sourceImage, target string) error {
-	sourceRef, err := name.ParseReference(sourceImage)
-	if err != nil {
+func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry string, layoutPath layout.Path, sourceImage, target, ociDigest string) error {
+	if _, err := name.ParseReference(sourceImage); err != nil {
 		return fmt.Errorf("parse source image %q: %w", sourceImage, err)
 	}
 
-	registry = strings.TrimRight(registry, "/")
-	var sourceTag *name.Tag
-	if tag, ok := sourceRef.(name.Tag); ok {
-		sourceTag = &tag
+	hash, err := v1.NewHash(ociDigest)
+	if err != nil {
+		return fmt.Errorf("parse oci digest %q: %w", ociDigest, err)
 	}
 
-	img, err := loadTarballImage(archivePath, sourceTag)
+	registry = strings.TrimRight(registry, "/")
+
+	img, err := loadLayoutImage(layoutPath, hash)
 	if err != nil {
-		return fmt.Errorf("load archive %q: %w", archivePath, err)
+		return fmt.Errorf("load image %q from oci layout: %w", sourceImage, err)
 	}
 
 	destRef, err := name.ParseReference(fmt.Sprintf("%s/%s", registry, target))
@@ -57,7 +79,7 @@ func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry, 
 	}
 
 	if err := writeRemoteImage(destRef, img, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain)); err != nil {
-		return fmt.Errorf("push archive %q to registry %q: %w", archivePath, registry, err)
+		return fmt.Errorf("push image %q to registry %q: %w", sourceImage, registry, err)
 	}
 
 	return nil

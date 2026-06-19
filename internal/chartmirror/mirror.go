@@ -31,6 +31,7 @@ type Options struct {
 	Version     string
 	Namespace   string
 	OutputDir   string
+	Concurrency int
 }
 
 type searchResult struct {
@@ -42,8 +43,8 @@ type Runner struct {
 	renderManifest       func(r Runner, ctx context.Context, opts Options) (string, error)
 	defaultOutputDir     func(chart string) (string, error)
 	extractImages        func(manifest string) ([]string, error)
-	archiveImages        func(ctx context.Context, images []string, outputDir string) ([]string, error)
-	generatePushManifest func(images []string) (string, error)
+	archiveImages        func(ctx context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error)
+	generatePushManifest func(specs []mirror.ArchiveSpec) (string, error)
 	copySelfExecutable   func(outputDir string) (string, error)
 }
 
@@ -87,11 +88,12 @@ func (r Runner) Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	if _, err := r.archiveImages(ctx, images, outputDir); err != nil {
+	specs, err := r.archiveImages(ctx, images, outputDir, opts.Concurrency)
+	if err != nil {
 		return err
 	}
 
-	pushManifest, err := r.generatePushManifest(images)
+	pushManifest, err := r.generatePushManifest(specs)
 	if err != nil {
 		return err
 	}

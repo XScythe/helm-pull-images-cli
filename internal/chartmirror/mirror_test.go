@@ -63,7 +63,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		}
 		return []string{"quay.io/example/api:v1"}, nil
 	}
-	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string) ([]string, error) {
+	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error) {
 		calls = append(calls, "archive")
 		if got, want := images, []string{"quay.io/example/api:v1"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("archiveImages() images = %v, want %v", got, want)
@@ -71,12 +71,24 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		if outputDir == "" {
 			t.Fatal("archiveImages() got empty outputDir")
 		}
-		return []string{filepath.Join(outputDir, "quay.io_example_api_v1.tar")}, nil
+		if concurrency != 4 {
+			t.Fatalf("archiveImages() concurrency = %d, want 4", concurrency)
+		}
+		return []mirror.ArchiveSpec{{
+			Image:     "quay.io/example/api:v1",
+			Target:    "example/api:v1",
+			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}, nil
 	}
-	h.runner.generatePushManifest = func(images []string) (string, error) {
+	h.runner.generatePushManifest = func(specs []mirror.ArchiveSpec) (string, error) {
 		calls = append(calls, "manifest")
-		if got, want := images, []string{"quay.io/example/api:v1"}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("generatePushManifest() images = %v, want %v", got, want)
+		want := []mirror.ArchiveSpec{{
+			Image:     "quay.io/example/api:v1",
+			Target:    "example/api:v1",
+			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}
+		if got := specs; !reflect.DeepEqual(got, want) {
+			t.Fatalf("generatePushManifest() specs = %v, want %v", got, want)
 		}
 		return "{\n  \"images\": []\n}\n", nil
 	}
@@ -98,6 +110,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		Chart:       chartDir,
 		Namespace:   "default",
 		OutputDir:   filepath.Join(dir, "out"),
+		Concurrency: 4,
 	}); err != nil {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}

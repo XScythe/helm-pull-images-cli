@@ -7,3 +7,9 @@ func TestPushCommandExposesRegistryFlag(t *testing.T) {
 		t.Fatalf("push command missing registry flag")
 	}
 }
+
+func TestPushCommandExposesConcurrencyFlag(t *testing.T) {
+	if pushCmd.Flags().Lookup("concurrency") == nil {
+		t.Fatalf("push command missing concurrency flag")
+	}
+}

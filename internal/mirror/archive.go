@@ -5,55 +5,89 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"golang.org/x/sync/errgroup"
 )
 
-var copyImageToArchive = copyImageToArchiveUsingGoContainerRegistry
 var fetchRemoteImage = remote.Image
-var writeTarball = tarball.Write
+var writeLayout = layout.Write
+var appendLayoutImage = func(path layout.Path, img v1.Image) error {
+	return path.AppendImage(img)
+}
 
-func ArchiveImages(ctx context.Context, images []string, outputDir string) ([]string, error) {
+func ArchiveImages(ctx context.Context, images []string, outputDir string, concurrency int) ([]ArchiveSpec, error) {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 
-	archives := make([]string, 0, len(images))
-	for _, image := range images {
-		archivePath := filepath.Join(outputDir, ArchiveFileName(image))
-		if err := copyImageToArchive(ctx, image, archivePath); err != nil {
-			return nil, fmt.Errorf("archive %s: %w", image, err)
-		}
-		archives = append(archives, archivePath)
+	specs, err := BuildSpecs(images)
+	if err != nil {
+		return nil, err
 	}
 
-	return archives, nil
+	layoutPath, err := writeLayout(filepath.Join(outputDir, OCILayoutDirName()), empty.Index)
+	if err != nil {
+		return nil, fmt.Errorf("create oci image layout: %w", err)
+	}
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(normalizeConcurrency(concurrency))
+
+	var writeMu sync.Mutex
+	for i := range specs {
+		i := i
+		group.Go(func() error {
+			digest, copyErr := copyImageToLayoutUsingGoContainerRegistry(groupCtx, specs[i].Image, layoutPath, &writeMu)
+			if copyErr != nil {
+				return fmt.Errorf("archive %s: %w", specs[i].Image, copyErr)
+			}
+			specs[i].OCIDigest = digest
+			return nil
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		_ = os.RemoveAll(string(layoutPath))
+		return nil, err
+	}
+
+	return specs, nil
 }
 
-func copyImageToArchiveUsingGoContainerRegistry(ctx context.Context, image, archivePath string) error {
+func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string, layoutPath layout.Path, writeMu *sync.Mutex) (string, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
-		return fmt.Errorf("parse source image %q: %w", image, err)
+		return "", fmt.Errorf("parse source image %q: %w", image, err)
 	}
 
 	img, err := fetchRemoteImage(ref, remote.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("fetch source image %q: %w", image, err)
+		return "", fmt.Errorf("fetch source image %q: %w", image, err)
 	}
 
-	out, err := os.Create(archivePath)
+	digest, err := img.Digest()
 	if err != nil {
-		return fmt.Errorf("create archive %q: %w", archivePath, err)
-	}
-	defer out.Close()
-
-	if err := writeTarball(ref, img, out); err != nil {
-		_ = out.Close()
-		_ = os.Remove(archivePath)
-		return fmt.Errorf("write archive %q: %w", archivePath, err)
+		return "", fmt.Errorf("resolve digest for image %q: %w", image, err)
 	}
 
-	return nil
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	if err := appendLayoutImage(layoutPath, img); err != nil {
+		return "", fmt.Errorf("append image %q to oci layout: %w", image, err)
+	}
+
+	return digest.String(), nil
+}
+
+func normalizeConcurrency(value int) int {
+	if value < 1 {
+		return 1
+	}
+	return value
 }

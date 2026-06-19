@@ -9,21 +9,27 @@ import (
 )
 
 type ArchiveSpec struct {
-	Image   string `json:"image"`
-	Archive string `json:"archive"`
-	Target  string `json:"target"`
+	Image     string `json:"image"`
+	Target    string `json:"target"`
+	OCIDigest string `json:"ociDigest"`
 }
 
 type PushManifest struct {
-	Images []ArchiveSpec `json:"images"`
+	LayoutDir string        `json:"layoutDir"`
+	Images    []ArchiveSpec `json:"images"`
 }
 
-func GeneratePushManifest(images []string) (string, error) {
-	specs, err := BuildSpecs(images)
-	if err != nil {
-		return "", err
+func GeneratePushManifest(specs []ArchiveSpec) (string, error) {
+	for _, spec := range specs {
+		if spec.OCIDigest == "" {
+			return "", fmt.Errorf("missing oci digest for image %q", spec.Image)
+		}
 	}
-	data, err := json.MarshalIndent(PushManifest{Images: specs}, "", "  ")
+
+	data, err := json.MarshalIndent(PushManifest{
+		LayoutDir: OCILayoutDirName(),
+		Images:    specs,
+	}, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal push manifest: %w", err)
 	}
@@ -34,13 +40,8 @@ func PushManifestFileName() string {
 	return "push_images.json"
 }
 
-func ArchiveFileName(image string) string {
-	return archiveFileName(image)
-}
-
-func archiveFileName(image string) string {
-	replacer := strings.NewReplacer("/", "_", ":", "_", "@", "_")
-	return replacer.Replace(image) + ".tar"
+func OCILayoutDirName() string {
+	return "oci-layout"
 }
 
 func BuildSpecs(images []string) ([]ArchiveSpec, error) {
@@ -51,9 +52,8 @@ func BuildSpecs(images []string) ([]ArchiveSpec, error) {
 			return nil, err
 		}
 		specs = append(specs, ArchiveSpec{
-			Image:   image,
-			Archive: archiveFileName(image),
-			Target:  target,
+			Image:  image,
+			Target: target,
 		})
 	}
 	return specs, nil

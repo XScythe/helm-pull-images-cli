@@ -8,12 +8,13 @@ import (
 )
 
 var (
-	pullChart     string
-	pullRepo      string
-	pullVersion   string
-	pullNamespace string
-	pullOutputDir string
-	pullRelease   string
+	pullChart       string
+	pullRepo        string
+	pullVersion     string
+	pullNamespace   string
+	pullOutputDir   string
+	pullRelease     string
+	pullConcurrency int
 )
 
 var pullCmd = &cobra.Command{
@@ -31,6 +32,7 @@ var pullCmd = &cobra.Command{
 			Version:     pullVersion,
 			Namespace:   pullNamespace,
 			OutputDir:   pullOutputDir,
+			Concurrency: pullConcurrency,
 		})
 	},
 }
@@ -40,7 +42,8 @@ func init() {
 	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL")
 	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
 	pullCmd.Flags().StringVar(&pullNamespace, "namespace", "default", "Release namespace")
-	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for archives and script (defaults to a new directory in the current working directory)")
+	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script (defaults to a new directory in the current working directory)")
 	pullCmd.Flags().StringVar(&pullRelease, "release-name", "mirror", "Helm release name")
+	pullCmd.Flags().IntVar(&pullConcurrency, "concurrency", 4, "Number of images to fetch and stage concurrently")
 	_ = pullCmd.MarkFlagRequired("chart")
 }

@@ -102,7 +102,7 @@ func ensureRegistry(t *testing.T) (string, error) {
 func stopRegistryContainer(t *testing.T, containerID string) {
 	t.Helper()
 
-	cmd := exec.Command("docker", "stop", "--time", "5", containerID)
+	cmd := exec.Command("docker", "stop", "--timeout", "5", containerID)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := string(output)
@@ -221,8 +221,8 @@ func checkE2EArtifacts(t *testing.T, outputDir, sourceImage string) {
 	if _, err := os.Stat(filepath.Join(outputDir, mirror.PushManifestFileName())); err != nil {
 		t.Fatalf("missing push manifest: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outputDir, mirror.ArchiveFileName(sourceImage))); err != nil {
-		t.Fatalf("missing image archive: %v", err)
+	if info, err := os.Stat(filepath.Join(outputDir, mirror.OCILayoutDirName())); err != nil || !info.IsDir() {
+		t.Fatalf("missing OCI layout directory: %v", err)
 	}
 
 	manifest, err := mirror.ReadPushManifest(outputDir)
@@ -234,6 +234,9 @@ func checkE2EArtifacts(t *testing.T, outputDir, sourceImage string) {
 	}
 	if manifest.Images[0].Image != sourceImage {
 		t.Fatalf("push manifest image = %q, want %q", manifest.Images[0].Image, sourceImage)
+	}
+	if manifest.Images[0].OCIDigest == "" {
+		t.Fatal("push manifest missing oci digest")
 	}
 }
 

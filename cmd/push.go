@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	pushRegistry string
-	pushInputDir string
+	pushRegistry    string
+	pushInputDir    string
+	pushConcurrency int
 )
 
 var pushCmd = &cobra.Command{
 	Use:   "push",
-	Short: "Push mirrored images from generated archives",
+	Short: "Push mirrored images from generated OCI layout artifacts",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if pushRegistry == "" {
 			return fmt.Errorf("--registry is required")
@@ -31,13 +32,14 @@ var pushCmd = &cobra.Command{
 			inputDir = dir
 		}
 
-		return mirror.PushImages(cmd.Context(), pushRegistry, inputDir)
+		return mirror.PushImages(cmd.Context(), pushRegistry, inputDir, pushConcurrency)
 	},
 }
 
 func init() {
 	pushCmd.Flags().StringVar(&pushRegistry, "registry", "", "Target registry host")
-	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and archives (defaults to the helper binary directory)")
+	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and OCI layout artifacts (defaults to the helper binary directory)")
+	pushCmd.Flags().IntVar(&pushConcurrency, "concurrency", 4, "Number of images to push concurrently")
 }
 
 func defaultPushInputDir() (string, error) {
