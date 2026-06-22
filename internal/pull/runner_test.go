@@ -1,8 +1,14 @@
-package chartmirror
+package pull
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"helm-pull-images-cli/internal/push"
+	"helm-pull-images-cli/internal/pushspec"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,14 +17,28 @@ import (
 	"testing"
 
 	helmchart "helm.sh/helm/v3/pkg/chart"
-
-	"helm-pull-images-cli/internal/mirror"
 )
+
+func testLoadedChart(name, version, source string) loadedChart {
+	return loadedChart{
+		Chart: &helmchart.Chart{
+			Metadata: &helmchart.Metadata{
+				Name:    name,
+				Version: version,
+			},
+		},
+		Info: ChartInfo{
+			Name:    name,
+			Version: version,
+			Source:  source,
+		},
+	}
+}
 
 func TestDefaultOutputDirCreatesNewDirectoryInCWD(t *testing.T) {
 	h := newRunnerTestHarness(t)
 
-	dir, err := h.runner.defaultOutputDir("openebs")
+	dir, err := defaultOutputDir("openebs")
 	if err != nil {
 		t.Fatalf("defaultOutputDir() error = %v", err)
 	}
@@ -45,7 +65,7 @@ func TestDefaultOutputDirAppendsTimestampWhenDirectoryExists(t *testing.T) {
 	}
 
 	// Call defaultOutputDir for the same chart
-	dir, err := h.runner.defaultOutputDir(chart)
+	dir, err := defaultOutputDir(chart)
 	if err != nil {
 		t.Fatalf("defaultOutputDir() error = %v", err)
 	}
@@ -95,10 +115,25 @@ func TestResolveChartVersionSkipsPrereleases(t *testing.T) {
 	}
 }
 
+func TestLoadConfiguredReposMissingFileIsNotAnError(t *testing.T) {
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(t.TempDir(), "repositories.yaml"))
+
+	repos, err := loadConfiguredRepos()
+	if err != nil {
+		t.Fatalf("loadConfiguredRepos() error = %v", err)
+	}
+	if repos != nil {
+		t.Fatalf("loadConfiguredRepos() = %v, want nil", repos)
+	}
+}
+
 func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 	h := newRunnerTestHarness(t)
 
 	var calls []string
+	h.runner.localChartSource = func(_ context.Context, opts Options) (loadedChart, error) {
+		return testLoadedChart("demo", "1.0.0", opts.Chart), nil
+	}
 	h.runner.renderManifest = func(_ Runner, _ context.Context, opts Options) (string, error) {
 		calls = append(calls, "render:"+opts.Chart)
 		return "kind: ConfigMap\nmetadata:\n  name: demo\n  annotations:\n    image: quay.io/example/api:v1\n", nil
@@ -113,7 +148,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		}
 		return []string{"quay.io/example/api:v1"}, nil
 	}
-	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error) {
+	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int, _ ...io.Writer) ([]pushspec.ArchiveSpec, error) {
 		calls = append(calls, "archive")
 		if got, want := images, []string{"quay.io/example/api:v1"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("archiveImages() images = %v, want %v", got, want)
@@ -124,15 +159,15 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		if concurrency != 4 {
 			t.Fatalf("archiveImages() concurrency = %d, want 4", concurrency)
 		}
-		return []mirror.ArchiveSpec{{
+		return []pushspec.ArchiveSpec{{
 			Image:     "quay.io/example/api:v1",
 			Target:    "example/api:v1",
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}}, nil
 	}
-	h.runner.writePushManifest = func(outputDir string, specs []mirror.ArchiveSpec) error {
+	h.runner.writePushManifest = func(outputDir string, specs []pushspec.ArchiveSpec) error {
 		calls = append(calls, "manifest")
-		want := []mirror.ArchiveSpec{{
+		want := []pushspec.ArchiveSpec{{
 			Image:     "quay.io/example/api:v1",
 			Target:    "example/api:v1",
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -140,7 +175,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		if got := specs; !reflect.DeepEqual(got, want) {
 			t.Fatalf("writePushManifest() specs = %v, want %v", got, want)
 		}
-		manifestPath := filepath.Join(outputDir, mirror.PushManifestFileName())
+		manifestPath := filepath.Join(outputDir, pushspec.PushManifestFileName())
 		return os.WriteFile(manifestPath, []byte("{\n  \"images\": []\n}\n"), 0o644)
 	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
@@ -148,7 +183,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		if outputDir == "" {
 			t.Fatal("copySelfExecutable() got empty outputDir")
 		}
-		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+		return filepath.Join(outputDir, push.PushBinaryName()), nil
 	}
 
 	dir := t.TempDir()
@@ -168,7 +203,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		t.Fatalf("Runner.Run() calls = %v, want %v", got, want)
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, "out", mirror.PushManifestFileName())); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "out", pushspec.PushManifestFileName())); err != nil {
 		t.Fatalf("Runner.Run() did not write push manifest: %v", err)
 	}
 }
@@ -177,6 +212,12 @@ func TestRunnerRunIncludesChartAnnotationImagesBeforeManifestImages(t *testing.T
 	h := newRunnerTestHarness(t)
 
 	var archiveCalls [][]string
+	h.runner.localChartSource = func(_ context.Context, opts Options) (loadedChart, error) {
+		return testLoadedChart("example", "0.1.0", opts.Chart), nil
+	}
+	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
+		return []string{"quay.io/example/from-annotation:v2", "busybox:1.36"}, nil
+	}
 	h.runner.renderManifest = func(_ Runner, _ context.Context, _ Options) (string, error) {
 		return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: demo\n", nil
 	}
@@ -186,10 +227,10 @@ func TestRunnerRunIncludesChartAnnotationImagesBeforeManifestImages(t *testing.T
 			"quay.io/example/from-annotation:v2",
 		}, nil
 	}
-	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int) ([]mirror.ArchiveSpec, error) {
+	h.runner.archiveImages = func(_ context.Context, images []string, outputDir string, concurrency int, _ ...io.Writer) ([]pushspec.ArchiveSpec, error) {
 		archiveCalls = append(archiveCalls, append([]string{}, images...))
-		if reflect.DeepEqual(images, []string{"quay.io/example/from-annotation:v2", "busybox:1.36"}) {
-			return []mirror.ArchiveSpec{
+		if reflect.DeepEqual(images, []string{"quay.io/example/from-annotation:v2", "busybox:1.36", "quay.io/example/app:v1"}) {
+			return []pushspec.ArchiveSpec{
 				{
 					Image:     "quay.io/example/from-annotation:v2",
 					Target:    "example/from-annotation:v2",
@@ -200,21 +241,21 @@ func TestRunnerRunIncludesChartAnnotationImagesBeforeManifestImages(t *testing.T
 					Target:    "library/busybox:1.36",
 					OCIDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				},
+				{
+					Image:     "quay.io/example/app:v1",
+					Target:    "example/app:v1",
+					OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				},
 			}, nil
 		}
-		return []mirror.ArchiveSpec{
-			{
-				Image:     "quay.io/example/app:v1",
-				Target:    "example/app:v1",
-				OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			},
-		}, nil
+		t.Fatalf("unexpected archive images: %v", images)
+		return nil, nil
 	}
-	h.runner.writePushManifest = func(outputDir string, specs []mirror.ArchiveSpec) error {
-		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{\n  \"images\": []\n}\n"), 0o644)
+	h.runner.writePushManifest = func(outputDir string, specs []pushspec.ArchiveSpec) error {
+		return os.WriteFile(filepath.Join(outputDir, pushspec.PushManifestFileName()), []byte("{\n  \"images\": []\n}\n"), 0o644)
 	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
-		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+		return filepath.Join(outputDir, push.PushBinaryName()), nil
 	}
 
 	dir := t.TempDir()
@@ -252,8 +293,7 @@ metadata:
 	}
 
 	wantCalls := [][]string{
-		{"quay.io/example/from-annotation:v2", "busybox:1.36"},
-		{"quay.io/example/app:v1"},
+		{"quay.io/example/from-annotation:v2", "busybox:1.36", "quay.io/example/app:v1"},
 	}
 	if !reflect.DeepEqual(archiveCalls, wantCalls) {
 		t.Fatalf("Runner.Run() archive calls = %v, want %v", archiveCalls, wantCalls)
@@ -264,6 +304,9 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 	h := newRunnerTestHarness(t)
 
 	var calls []string
+	h.runner.localChartSource = func(_ context.Context, opts Options) (loadedChart, error) {
+		return testLoadedChart("example", "0.1.0", opts.Chart), nil
+	}
 	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
 		calls = append(calls, "chart")
 		return nil, nil
@@ -277,21 +320,21 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 		calls = append(calls, "extract")
 		return []string{"busybox:1.36"}, nil
 	}
-	h.runner.archiveImages = func(_ context.Context, _ []string, _ string, _ int) ([]mirror.ArchiveSpec, error) {
+	h.runner.archiveImages = func(_ context.Context, _ []string, _ string, _ int, _ ...io.Writer) ([]pushspec.ArchiveSpec, error) {
 		calls = append(calls, "archive")
-		return []mirror.ArchiveSpec{{
+		return []pushspec.ArchiveSpec{{
 			Image:     "busybox:1.36",
 			Target:    "library/busybox:1.36",
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}}, nil
 	}
-	h.runner.writePushManifest = func(outputDir string, _ []mirror.ArchiveSpec) error {
+	h.runner.writePushManifest = func(outputDir string, _ []pushspec.ArchiveSpec) error {
 		calls = append(calls, "manifest")
-		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{}\n"), 0o644)
+		return os.WriteFile(filepath.Join(outputDir, pushspec.PushManifestFileName()), []byte("{}\n"), 0o644)
 	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
 		calls = append(calls, "copy")
-		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+		return filepath.Join(outputDir, push.PushBinaryName()), nil
 	}
 
 	if err := h.runner.Run(context.Background(), Options{
@@ -311,6 +354,9 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 func TestRunnerExecuteReturnsPullResult(t *testing.T) {
 	h := newRunnerTestHarness(t)
 
+	h.runner.localChartSource = func(_ context.Context, opts Options) (loadedChart, error) {
+		return testLoadedChart("example", "0.1.0", opts.Chart), nil
+	}
 	h.runner.extractChartImages = func(_ context.Context, _ Options) ([]string, error) {
 		return []string{"busybox:1.36"}, nil
 	}
@@ -320,26 +366,27 @@ func TestRunnerExecuteReturnsPullResult(t *testing.T) {
 	h.runner.extractImages = func(_ string) ([]string, error) {
 		return nil, nil
 	}
-	h.runner.archiveImages = func(_ context.Context, images []string, _ string, _ int) ([]mirror.ArchiveSpec, error) {
-		return []mirror.ArchiveSpec{{
+	h.runner.archiveImages = func(_ context.Context, images []string, _ string, _ int, _ ...io.Writer) ([]pushspec.ArchiveSpec, error) {
+		return []pushspec.ArchiveSpec{{
 			Image:     images[0],
 			Target:    "library/busybox:1.36",
 			OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		}}, nil
 	}
-	h.runner.writePushManifest = func(outputDir string, _ []mirror.ArchiveSpec) error {
-		return os.WriteFile(filepath.Join(outputDir, mirror.PushManifestFileName()), []byte("{}\n"), 0o644)
+	h.runner.writePushManifest = func(outputDir string, _ []pushspec.ArchiveSpec) error {
+		return os.WriteFile(filepath.Join(outputDir, pushspec.PushManifestFileName()), []byte("{}\n"), 0o644)
 	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
-		return filepath.Join(outputDir, mirror.PushBinaryName()), nil
+		return filepath.Join(outputDir, push.PushBinaryName()), nil
 	}
 
 	outDir := t.TempDir()
+	status := new(bytes.Buffer)
 	result, err := h.runner.Execute(context.Background(), Options{
 		Chart:       "ignored-by-stub",
 		OutputDir:   outDir,
 		Concurrency: 1,
-	})
+	}, status)
 	if err != nil {
 		t.Fatalf("Runner.Execute() error = %v", err)
 	}
@@ -347,14 +394,63 @@ func TestRunnerExecuteReturnsPullResult(t *testing.T) {
 	if result.OutputDir != outDir {
 		t.Fatalf("Runner.Execute() outputDir = %q, want %q", result.OutputDir, outDir)
 	}
+	if result.Chart.Name != "example" {
+		t.Fatalf("Runner.Execute() chart = %#v", result.Chart)
+	}
+	if got := status.String(); !strings.Contains(got, "chart: name=example version=0.1.0 source=ignored-by-stub") {
+		t.Fatalf("Runner.Execute() status = %q", got)
+	}
 	if got, want := result.Images, []string{"busybox:1.36"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Runner.Execute() images = %v, want %v", got, want)
 	}
-	if got, want := result.ManifestPath, filepath.Join(outDir, mirror.PushManifestFileName()); got != want {
+	if got, want := result.ManifestPath, filepath.Join(outDir, pushspec.PushManifestFileName()); got != want {
 		t.Fatalf("Runner.Execute() manifestPath = %q, want %q", got, want)
 	}
 	if len(result.ArchiveSpecs) != 1 || result.ArchiveSpecs[0].Image != "busybox:1.36" {
 		t.Fatalf("Runner.Execute() archiveSpecs = %#v", result.ArchiveSpecs)
+	}
+}
+
+func TestRunnerExecuteRemovesEmptyCreatedOutputDirOnError(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(t.TempDir(), "repositories.yaml"))
+	h.runner.localChartSource = func(_ context.Context, _ Options) (loadedChart, error) {
+		return loadedChart{}, fmt.Errorf("chart not found")
+	}
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	if _, err := h.runner.Execute(context.Background(), Options{
+		Chart:     "missing",
+		OutputDir: outDir,
+	}); err == nil {
+		t.Fatal("Runner.Execute() error = nil, want failure")
+	}
+
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("Runner.Execute() left output dir behind: %v", err)
+	}
+}
+
+func TestRunnerExecuteRemovesPreexistingEmptyOutputDirOnError(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(t.TempDir(), "repositories.yaml"))
+	h.runner.localChartSource = func(_ context.Context, _ Options) (loadedChart, error) {
+		return loadedChart{}, fmt.Errorf("chart not found")
+	}
+
+	outDir := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if _, err := h.runner.Execute(context.Background(), Options{
+		Chart:     "missing",
+		OutputDir: outDir,
+	}); err == nil {
+		t.Fatal("Runner.Execute() error = nil, want failure")
+	}
+
+	if _, err := os.Stat(outDir); !os.IsNotExist(err) {
+		t.Fatalf("Runner.Execute() left empty output dir behind: %v", err)
 	}
 }
 
@@ -526,6 +622,105 @@ func TestResolveChartVersionHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestLoadHelmRepoChartMissingChartListsAvailableCharts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.yaml" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `apiVersion: v1
+entries:
+  nginx:
+    - version: 1.2.3
+  redis:
+    - version: 2.0.0
+`)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := loadHelmRepoChart(context.Background(), Options{
+		Chart: "missing",
+		Repo:  server.URL,
+	})
+	if err == nil {
+		t.Fatal("loadHelmRepoChart() error = nil, want missing chart error")
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, "not found in repo") {
+		t.Fatalf("error should indicate repo miss, got: %s", errStr)
+	}
+	if !strings.Contains(errStr, "charts: nginx, redis") {
+		t.Fatalf("error should list available charts, got: %s", errStr)
+	}
+}
+
+func TestLoadHelmRepoChartVersionMismatchListsAvailableVersions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.yaml" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `apiVersion: v1
+entries:
+  nginx:
+    - version: 2.3.0
+    - version: 2.1.0
+    - version: 2.0.0
+    - version: 1.9.0
+    - version: 2.2.0-alpha.1
+  redis:
+    - version: 1.0.0
+`)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := loadHelmRepoChart(context.Background(), Options{
+		Chart:   "nginx",
+		Repo:    server.URL,
+		Version: "1.0.0",
+	})
+	if err == nil {
+		t.Fatal("loadHelmRepoChart() error = nil, want version mismatch error")
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, "found in repo") {
+		t.Fatalf("error should indicate chart name matched, got: %s", errStr)
+	}
+	if !strings.Contains(errStr, `version "1.0.0" missing`) {
+		t.Fatalf("error should mention missing version, got: %s", errStr)
+	}
+	if !strings.Contains(errStr, "versions: 2.3.0, 2.1.0, 2.0.0") {
+		t.Fatalf("error should list available versions, got: %s", errStr)
+	}
+}
+
+func TestLoadHelmRepoChartRejectsNonHelmWebsite(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.yaml" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `<!doctype html><html lang="en"><body><h1>Example Domain</h1></body></html>`)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := loadHelmRepoChart(context.Background(), Options{
+		Chart: "openebs",
+		Repo:  server.URL,
+	})
+	if err == nil {
+		t.Fatal("loadHelmRepoChart() error = nil, want non-helm repository error")
+	}
+
+	if !strings.Contains(err.Error(), "does not look like a Helm repository") {
+		t.Fatalf("error should reject non-helm websites, got: %s", err)
+	}
+}
+
 type runnerTestHarness struct {
 	t      *testing.T
 	cwd    string
@@ -552,13 +747,14 @@ func newRunnerTestHarness(t *testing.T) *runnerTestHarness {
 // TestLoadChartFallbackToConfiguredReposOnLocalFailure verifies fallback activates when local load fails
 func TestLoadChartFallbackToConfiguredReposOnLocalFailure(t *testing.T) {
 	h := newRunnerTestHarness(t)
-	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
-		return nil, fmt.Errorf("local chart not found")
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(t.TempDir(), "repositories.yaml"))
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return loadedChart{}, fmt.Errorf("local chart not found")
 	}
-	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
 		// This simulates what happens when fallback searches configured repos
 		// In a real scenario with configured repos, this would return a chart
-		return nil, fmt.Errorf("chart not found in any configured repo")
+		return loadedChart{}, fmt.Errorf("chart not found in any configured repo")
 	}
 
 	_, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
@@ -570,6 +766,54 @@ func TestLoadChartFallbackToConfiguredReposOnLocalFailure(t *testing.T) {
 	if !strings.Contains(errStr, "not found") {
 		t.Fatalf("error should indicate chart not found, got: %s", errStr)
 	}
+	if !strings.Contains(errStr, "download/pull the chart first or add its repository to Helm") {
+		t.Fatalf("error should provide recovery guidance, got: %s", errStr)
+	}
+}
+
+func TestLoadChartVersionMismatchUsesConfiguredRepoDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/index.yaml" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `apiVersion: v1
+entries:
+  openebs:
+    - version: 3.11.0
+    - version: 3.10.0
+    - version: 3.9.0
+`)
+	}))
+	t.Cleanup(server.Close)
+
+	repoConfigPath := filepath.Join(t.TempDir(), "repositories.yaml")
+	if err := os.WriteFile(repoConfigPath, []byte(fmt.Sprintf(`apiVersion: v1
+generated: "2026-06-22T00:00:00Z"
+repositories:
+- name: test
+  url: %s
+`, server.URL)), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("HELM_REPOSITORY_CONFIG", repoConfigPath)
+
+	h := newRunnerTestHarness(t)
+	_, err := h.runner.loadChart(context.Background(), Options{
+		Chart:   "openebs",
+		Version: "111.0.0",
+	})
+	if err == nil {
+		t.Fatal("loadChart() error = nil, want version mismatch error")
+	}
+
+	errStr := err.Error()
+	if !strings.Contains(errStr, `found in repo`) {
+		t.Fatalf("error should mention repo version mismatch, got: %s", errStr)
+	}
+	if !strings.Contains(errStr, `versions: 3.11.0, 3.10.0, 3.9.0`) {
+		t.Fatalf("error should list last 3 stable versions, got: %s", errStr)
+	}
 }
 
 // TestLoadChartNoFallbackWhenLocalSucceeds verifies fallback doesn't trigger if local load succeeds
@@ -577,9 +821,9 @@ func TestLoadChartNoFallbackWhenLocalSucceeds(t *testing.T) {
 	h := newRunnerTestHarness(t)
 	localCalled := false
 
-	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
 		localCalled = true
-		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "local"}}, nil
+		return testLoadedChart("local", "0.0.0", opts.Chart), nil
 	}
 
 	chrt, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
@@ -589,8 +833,8 @@ func TestLoadChartNoFallbackWhenLocalSucceeds(t *testing.T) {
 	if !localCalled {
 		t.Fatal("local source should have been called")
 	}
-	if chrt.Metadata.Name != "local" {
-		t.Fatalf("loadChart() returned chart name %q, want local", chrt.Metadata.Name)
+	if chrt.Info.Name != "local" {
+		t.Fatalf("loadChart() returned chart name %q, want local", chrt.Info.Name)
 	}
 }
 
@@ -599,12 +843,12 @@ func TestLoadChartNoFallbackWhenRepoSpecified(t *testing.T) {
 	h := newRunnerTestHarness(t)
 	localCalled := false
 
-	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
 		localCalled = true
-		return nil, fmt.Errorf("should not call")
+		return loadedChart{}, fmt.Errorf("should not call")
 	}
-	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
-		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "repo"}}, nil
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return testLoadedChart("repo", "0.0.0", opts.Repo), nil
 	}
 
 	chrt, err := h.runner.loadChart(context.Background(), Options{
@@ -617,20 +861,21 @@ func TestLoadChartNoFallbackWhenRepoSpecified(t *testing.T) {
 	if localCalled {
 		t.Fatal("local source should not have been called when repo is specified")
 	}
-	if chrt.Metadata.Name != "repo" {
-		t.Fatalf("loadChart() returned chart name %q, want repo", chrt.Metadata.Name)
+	if chrt.Info.Name != "repo" {
+		t.Fatalf("loadChart() returned chart name %q, want repo", chrt.Info.Name)
 	}
 }
 
 // TestLoadChartCombinedErrorContext verifies error message includes both local and fallback failure context
 func TestLoadChartCombinedErrorContext(t *testing.T) {
 	h := newRunnerTestHarness(t)
-	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
-		return nil, fmt.Errorf("local path does not exist")
+	t.Setenv("HELM_REPOSITORY_CONFIG", filepath.Join(t.TempDir(), "repositories.yaml"))
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return loadedChart{}, fmt.Errorf("local path does not exist")
 	}
 	// Simulate no configured repos by mocking helmChartSource to fail
-	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
-		return nil, fmt.Errorf("no configured repos available")
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return loadedChart{}, fmt.Errorf("no configured repos available")
 	}
 
 	_, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
@@ -641,15 +886,18 @@ func TestLoadChartCombinedErrorContext(t *testing.T) {
 	if !strings.Contains(errStr, "not found") {
 		t.Fatalf("error should indicate chart not found, got: %s", errStr)
 	}
+	if !strings.Contains(errStr, "download/pull the chart first or add its repository to Helm") {
+		t.Fatalf("error should provide recovery guidance, got: %s", errStr)
+	}
 }
 
 // TestLoadChartCachedResultNotBypassedByFallback verifies caching still works with fallback
 func TestLoadChartCachedResultNotBypassedByFallback(t *testing.T) {
 	h := newRunnerTestHarness(t)
 	callCount := 0
-	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
 		callCount++
-		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "cached"}}, nil
+		return testLoadedChart("cached", "0.0.0", opts.Chart), nil
 	}
 
 	opts := Options{Chart: "test"}
@@ -659,7 +907,7 @@ func TestLoadChartCachedResultNotBypassedByFallback(t *testing.T) {
 	if callCount != 1 {
 		t.Fatalf("localChartSource called %d times, want 1 (should use cache)", callCount)
 	}
-	if chrt1 != chrt2 {
+	if chrt1.Info.Name != chrt2.Info.Name || chrt1.Info.Source != chrt2.Info.Source {
 		t.Fatal("cached chart should return same object")
 	}
 }

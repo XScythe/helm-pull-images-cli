@@ -1,14 +1,17 @@
-package mirror
+package push
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"helm-pull-images-cli/internal/pushspec"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
@@ -52,8 +55,8 @@ func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 		t.Fatalf("ArchiveImages() error = %v", err)
 	}
 
-	if filepath.Base(layoutPath) != OCILayoutDirName() {
-		t.Fatalf("ArchiveImages() layout path = %q, want suffix %q", layoutPath, OCILayoutDirName())
+	if filepath.Base(layoutPath) != pushspec.OCILayoutDirName() {
+		t.Fatalf("ArchiveImages() layout path = %q, want suffix %q", layoutPath, pushspec.OCILayoutDirName())
 	}
 	if appended != 2 {
 		t.Fatalf("ArchiveImages() appended = %d, want 2", appended)
@@ -162,7 +165,7 @@ func TestArchiveImagesAppendsToExistingLayout(t *testing.T) {
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 
 	out := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(out, OCILayoutDirName()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(out, pushspec.OCILayoutDirName()), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
@@ -175,6 +178,52 @@ func TestArchiveImagesAppendsToExistingLayout(t *testing.T) {
 	}
 	if len(specs) != 1 || specs[0].OCIDigest == "" {
 		t.Fatalf("ArchiveImages() specs = %#v", specs)
+	}
+}
+
+func TestArchiveImagesReportsProgress(t *testing.T) {
+	originalFetch := fetchRemoteImage
+	originalWriteLayout := writeLayout
+	originalFromLayout := fromLayoutPath
+	originalAppend := appendLayoutImage
+	defer func() {
+		fetchRemoteImage = originalFetch
+		writeLayout = originalWriteLayout
+		fromLayoutPath = originalFromLayout
+		appendLayoutImage = originalAppend
+	}()
+
+	fetchRemoteImage = func(ref name.Reference, _ ...remote.Option) (v1.Image, error) {
+		return fakeImageWithDigest(t, map[string]string{
+			"quay.io/example/api:v1": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"busybox:1.36":           "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		}[ref.String()]), nil
+	}
+	writeLayout = func(path string, _ v1.ImageIndex) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	fromLayoutPath = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	appendLayoutImage = func(_ layout.Path, _ v1.Image) error {
+		return nil
+	}
+
+	status := new(bytes.Buffer)
+	if _, err := ArchiveImages(context.Background(), []string{"quay.io/example/api:v1", "busybox:1.36"}, t.TempDir(), 1, status); err != nil {
+		t.Fatalf("ArchiveImages() error = %v", err)
+	}
+
+	got := status.String()
+	if strings.Contains(got, "+1 more") {
+		t.Fatalf("ArchiveImages() status unexpectedly summarized images: %q", got)
+	}
+	if strings.Contains(got, "\x1b[") || strings.Contains(got, "\r") {
+		t.Fatalf("ArchiveImages() status unexpectedly used terminal control codes: %q", got)
+	}
+	if !strings.Contains(got, "pulling 1/2:") || !strings.Contains(got, "pulling 2/2:") ||
+		!strings.Contains(got, "quay.io/example/api:v1") || !strings.Contains(got, "busybox:1.36") {
+		t.Fatalf("ArchiveImages() status = %q", got)
 	}
 }
 

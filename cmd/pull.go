@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"github.com/spf13/cobra"
-	"helm-pull-images-cli/internal/chartmirror"
-	"helm-pull-images-cli/internal/config"
+	"helm-pull-images-cli/internal/pull"
 	"helm-pull-images-cli/internal/validation"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -17,12 +17,14 @@ var (
 )
 
 var pullCmd = &cobra.Command{
-	Use:   "pull",
+	Use:   "pull CHART",
 	Short: "Render a chart and mirror its images",
 	Long:  "Render a Helm chart and extract all referenced container images. Requires either --repo or locally configured Helm repositories.",
+	Args:  cobra.ExactArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		pullChart = args[0]
 		// Validate all flags
-		if err := validation.ValidateChartName("--chart", pullChart); err != nil {
+		if err := validation.ValidateChartName("chart argument", pullChart); err != nil {
 			return err
 		}
 		if pullRepo != "" {
@@ -39,30 +41,27 @@ var pullCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := config.New().WithVerbose(pullVerbose)
-		cfg.Logger.Info("pulling chart",
+		commandLogger(pullVerbose).Debug("pulling chart",
 			"chart", pullChart,
 			"repo", pullRepo,
 			"version", pullVersion,
 			"concurrency", pullConcurrency,
 		)
 
-		return chartmirror.Run(cmd.Context(), chartmirror.Options{
+		return pull.Run(cmd.Context(), pull.Options{
 			Chart:       pullChart,
 			Repo:        pullRepo,
 			Version:     pullVersion,
 			OutputDir:   pullOutputDir,
 			Concurrency: pullConcurrency,
-		})
+		}, cmd.ErrOrStderr())
 	},
 }
 
 func init() {
-	pullCmd.Flags().StringVar(&pullChart, "chart", "", "Helm chart name")
 	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL (optional; if not provided, searches configured Helm repositories)")
 	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
 	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script")
 	pullCmd.Flags().IntVar(&pullConcurrency, "concurrency", 4, "Number of images to fetch and stage concurrently")
 	pullCmd.Flags().BoolVar(&pullVerbose, "verbose", false, "Enable verbose logging")
-	pullCmd.MarkFlagRequired("chart")
 }

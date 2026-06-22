@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"github.com/spf13/cobra"
-	"helm-pull-images-cli/internal/config"
-	"helm-pull-images-cli/internal/mirror"
+	"helm-pull-images-cli/internal/push"
 	"helm-pull-images-cli/internal/validation"
+
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -28,13 +28,12 @@ var pushCmd = &cobra.Command{
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := config.New().WithVerbose(pushVerbose)
-		cfg.Logger.Info("pushing images to registry",
+		commandLogger(pushVerbose).Debug("pushing images to registry",
 			"registry", pushRegistry,
 			"concurrency", pushConcurrency,
 		)
 
-		return mirror.PushImages(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency)
+		return push.PushImages(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency, cmd.ErrOrStderr())
 	},
 }
 

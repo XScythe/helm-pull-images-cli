@@ -19,7 +19,6 @@ func TestMain(m *testing.M) {
 // TestPullCmd_FlagsRegistered verifies all expected flags are registered on pull command.
 func TestPullCmd_FlagsRegistered(t *testing.T) {
 	flags := []string{
-		"chart",
 		"repo",
 		"version",
 		"output-dir",
@@ -31,12 +30,11 @@ func TestPullCmd_FlagsRegistered(t *testing.T) {
 	}
 }
 
-// TestPullCmd_FlagsNotExposed verifies that pull command doesn't expose registry or local flags.
-// (These are push-only or not applicable to pull operations.)
+// TestPullCmd_FlagsNotExposed verifies that pull command doesn't expose registry flag.
+// (This is push-only or not applicable to pull operations.)
 func TestPullCmd_FlagsNotExposed(t *testing.T) {
 	flags := []string{
 		"registry",
-		"local",
 	}
 	for _, flag := range flags {
 		AssertFlagNotExists(t, pullCmd, flag)
@@ -46,7 +44,6 @@ func TestPullCmd_FlagsNotExposed(t *testing.T) {
 // TestPullCmd_FlagTypes verifies all flags have the correct types.
 func TestPullCmd_FlagTypes(t *testing.T) {
 	tests := map[string]string{
-		"chart":       "string",
 		"repo":        "string",
 		"version":     "string",
 		"output-dir":  "string",
@@ -72,17 +69,17 @@ func TestPullCmd_FlagDefaults(t *testing.T) {
 	}
 }
 
-// TestPullCmd_ChartFlagRequired verifies that --chart is required.
+// TestPullCmd_ChartFlagRequired verifies that chart positional argument is required.
 func TestPullCmd_ChartFlagRequired(t *testing.T) {
-	// Execute pull without --chart flag, expect error
+	// Execute pull without chart argument, expect error
 	output := ExecuteCommand(pullCmd, []string{})
 	if output.Err == nil {
-		t.Fatalf("expected error when --chart is missing, got none")
+		t.Fatalf("expected error when chart argument is missing, got none")
 	}
-	// Error should mention the missing flag
+	// Error should mention missing argument
 	errOutput := output.Stderr + output.Stdout
-	if !containsSubstring(errOutput, "chart") && !containsSubstring(errOutput, "required") {
-		t.Fatalf("error message should mention 'chart' or 'required', got: %s", errOutput)
+	if !strings.Contains(errOutput, "arg(s)") && !strings.Contains(errOutput, "received 0") {
+		t.Fatalf("error message should mention missing args, got: %s", errOutput)
 	}
 }
 
@@ -90,16 +87,16 @@ func TestPullCmd_ChartFlagRequired(t *testing.T) {
 func TestPullCmd_ValidateChartNameInvalid(t *testing.T) {
 	// Helm chart names must follow DNS-1123 subdomain rules
 	invalidNames := []string{
-		"Chart_Name",     // underscore not allowed
-		"CHART",          // uppercase allowed, but test invalid syntax
-		"-chart",         // cannot start with dash
-		"chart-",         // cannot end with dash
-		"chart@",         // special chars not allowed
+		"Chart_Name", // underscore not allowed
+		"CHART",      // uppercase allowed, but test invalid syntax
+		"-chart",     // cannot start with dash
+		"chart-",     // cannot end with dash
+		"chart@",     // special chars not allowed
 	}
 
 	for _, name := range invalidNames {
 		t.Run(name, func(t *testing.T) {
-			output := ExecuteCommand(pullCmd, []string{"--chart", name})
+			output := ExecuteCommand(pullCmd, []string{name})
 			if output.Err == nil {
 				t.Fatalf("expected error for invalid chart name %q, got none", name)
 			}
@@ -123,7 +120,7 @@ func TestPullCmd_ValidateChartNameValid(t *testing.T) {
 			})
 			defer restore()
 
-			output := ExecuteCommand(pullCmd, []string{"--chart", name})
+			output := ExecuteCommand(pullCmd, []string{name})
 			if output.Err != nil {
 				t.Fatalf("expected valid chart name %q to pass validation, got: %v", name, output.Err)
 			}
@@ -135,14 +132,14 @@ func TestPullCmd_ValidateChartNameValid(t *testing.T) {
 func TestPullCmd_ValidateRepoURLInvalid(t *testing.T) {
 	invalidURLs := []string{
 		"not-a-url",
-		"ftp://example.com",  // only http/https allowed conceptually
-		"example.com",        // missing scheme
+		"ftp://example.com",   // only http/https allowed conceptually
+		"example.com",         // missing scheme
 		"ht!tp://example.com", // invalid scheme
 	}
 
 	for _, url := range invalidURLs {
 		t.Run(url, func(t *testing.T) {
-			output := ExecuteCommand(pullCmd, []string{"--chart", "nginx", "--repo", url})
+			output := ExecuteCommand(pullCmd, []string{"nginx", "--repo", url})
 			if output.Err == nil {
 				t.Fatalf("expected error for invalid repo URL %q, got none", url)
 			}
@@ -165,7 +162,7 @@ func TestPullCmd_ValidateRepoURLValid(t *testing.T) {
 			})
 			defer restore()
 
-			output := ExecuteCommand(pullCmd, []string{"--chart", "nginx", "--repo", url})
+			output := ExecuteCommand(pullCmd, []string{"nginx", "--repo", url})
 			if output.Err != nil {
 				t.Fatalf("expected valid repo URL %q to pass validation, got: %v", url, output.Err)
 			}
@@ -183,7 +180,7 @@ func TestPullCmd_ValidateConcurrencyInvalid(t *testing.T) {
 
 	for testName, concurrency := range tests {
 		t.Run(testName, func(t *testing.T) {
-			output := ExecuteCommand(pullCmd, []string{"--chart", "nginx", "--concurrency", concurrency})
+			output := ExecuteCommand(pullCmd, []string{"nginx", "--concurrency", concurrency})
 			if output.Err == nil {
 				t.Fatalf("expected error for concurrency=%s, got none", concurrency)
 			}
@@ -202,7 +199,7 @@ func TestPullCmd_ValidateConcurrencyValid(t *testing.T) {
 			})
 			defer restore()
 
-			output := ExecuteCommand(pullCmd, []string{"--chart", "nginx", "--concurrency", concurrency})
+			output := ExecuteCommand(pullCmd, []string{"nginx", "--concurrency", concurrency})
 			if output.Err != nil {
 				t.Fatalf("expected valid concurrency %s to pass validation, got: %v", concurrency, output.Err)
 			}
@@ -212,14 +209,14 @@ func TestPullCmd_ValidateConcurrencyValid(t *testing.T) {
 
 // TestPullCmd_ExecuteMinimal tests pull command with minimal valid arguments (chart only).
 func TestPullCmd_ExecuteMinimal(t *testing.T) {
-	// Mock the chartmirror.Run function to avoid real I/O
+	// Mock the pull.Run function to avoid real I/O
 	restore := PatchCobraRunE(pullCmd, func(cmd *cobra.Command, args []string) error {
 		// Simulate successful command execution
 		return nil
 	})
 	defer restore()
 
-	output := ExecuteCommand(pullCmd, []string{"--chart", "nginx"})
+	output := ExecuteCommand(pullCmd, []string{"nginx"})
 	if output.Err != nil {
 		t.Fatalf("unexpected error: %v\nstderr: %s", output.Err, output.Stderr)
 	}
@@ -233,7 +230,7 @@ func TestPullCmd_ExecuteWithRepo(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--repo", "https://charts.example.com",
 	})
 	if output.Err != nil {
@@ -249,7 +246,7 @@ func TestPullCmd_ExecuteWithVersion(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--version", "1.0.0",
 	})
 	if output.Err != nil {
@@ -265,7 +262,7 @@ func TestPullCmd_ExecuteWithOutputDir(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--output-dir", "/tmp/output",
 	})
 	if output.Err != nil {
@@ -281,7 +278,7 @@ func TestPullCmd_ExecuteWithConcurrency(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--concurrency", "8",
 	})
 	if output.Err != nil {
@@ -297,7 +294,7 @@ func TestPullCmd_ExecuteWithVerbose(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--verbose",
 	})
 	if output.Err != nil {
@@ -313,7 +310,7 @@ func TestPullCmd_ExecuteAllFlags(t *testing.T) {
 	defer restore()
 
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--repo", "https://charts.bitnami.com/bitnami",
 		"--version", "14.0.0",
 		"--output-dir", "/tmp/nginx-mirror",
@@ -333,7 +330,7 @@ func TestPullCmd_HelpFlag(t *testing.T) {
 	}
 	// Help output should contain command description
 	helpOutput := output.Stdout + output.Stderr
-	if !containsSubstring(helpOutput, "Render") || !containsSubstring(helpOutput, "chart") {
+	if !strings.Contains(helpOutput, "Render") || !strings.Contains(helpOutput, "chart") {
 		t.Fatalf("help output missing expected content: %s", helpOutput)
 	}
 }
@@ -341,17 +338,12 @@ func TestPullCmd_HelpFlag(t *testing.T) {
 // TestPullCmd_UnknownFlag tests that unknown flags are rejected.
 func TestPullCmd_UnknownFlag(t *testing.T) {
 	output := ExecuteCommand(pullCmd, []string{
-		"--chart", "nginx",
+		"nginx",
 		"--unknown-flag", "value",
 	})
 	if output.Err == nil {
 		t.Fatalf("expected error for unknown flag, got none")
 	}
-}
-
-// Helper function to check if a substring exists in text.
-func containsSubstring(text, substr string) bool {
-	return strings.Contains(text, substr)
 }
 
 // Stub to allow command testing without external dependencies.

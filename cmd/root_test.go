@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestRootCmd_HasSubcommands verifies root command has the expected subcommands.
@@ -29,7 +33,7 @@ func TestRootCmd_HelpFlag(t *testing.T) {
 	}
 	// Help output should mention subcommands
 	helpOutput := output.Stdout + output.Stderr
-	if !containsSubstring(helpOutput, "pull") || !containsSubstring(helpOutput, "push") {
+	if !strings.Contains(helpOutput, "pull") || !strings.Contains(helpOutput, "push") {
 		t.Fatalf("help output missing subcommand mentions: %s", helpOutput)
 	}
 }
@@ -39,6 +43,9 @@ func TestRootCmd_InvalidSubcommand(t *testing.T) {
 	output := ExecuteCommand(rootCmd, []string{"invalid-command"})
 	if output.Err == nil {
 		t.Fatalf("expected error for invalid subcommand, got none")
+	}
+	if !strings.Contains(output.Stderr, "Run 'helm-pull-images-cli --help' for usage.") {
+		t.Fatalf("expected usage hint for invalid subcommand, got: %s", output.Stderr)
 	}
 }
 
@@ -52,6 +59,25 @@ func TestRootCmd_NoArgs(t *testing.T) {
 	}
 }
 
+func TestRootCmd_SilencesUsageForCommandErrors(t *testing.T) {
+	tempCmd := &cobra.Command{
+		Use: "temp",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return errors.New("boom")
+		},
+	}
+	rootCmd.AddCommand(tempCmd)
+	defer rootCmd.RemoveCommand(tempCmd)
+
+	output := ExecuteCommand(tempCmd, []string{})
+	if output.Err == nil {
+		t.Fatalf("expected error for temp command, got none")
+	}
+	if strings.Contains(output.Stderr, "Usage:") || strings.Contains(output.Stderr, "Run 'helm-pull-images-cli --help' for usage.") {
+		t.Fatalf("expected no usage output for command error, got: %s", output.Stderr)
+	}
+}
+
 // TestRootCmd_PullSubcommand tests that 'pull' subcommand can be invoked.
 func TestRootCmd_PullSubcommand(t *testing.T) {
 	// Test that 'pull --help' works from root
@@ -60,7 +86,7 @@ func TestRootCmd_PullSubcommand(t *testing.T) {
 		t.Fatalf("pull subcommand --help failed: %v", output.Err)
 	}
 	helpOutput := output.Stdout + output.Stderr
-	if !containsSubstring(helpOutput, "chart") {
+	if !strings.Contains(helpOutput, "chart") {
 		t.Fatalf("pull help missing 'chart' flag: %s", helpOutput)
 	}
 }
@@ -73,7 +99,7 @@ func TestRootCmd_PushSubcommand(t *testing.T) {
 		t.Fatalf("push subcommand --help failed: %v", output.Err)
 	}
 	helpOutput := output.Stdout + output.Stderr
-	if !containsSubstring(helpOutput, "registry") {
+	if !strings.Contains(helpOutput, "registry") {
 		t.Fatalf("push help missing 'registry' flag: %s", helpOutput)
 	}
 }

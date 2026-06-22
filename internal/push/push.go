@@ -1,16 +1,21 @@
-package mirror
+// Package push is the image transfer engine shared by both CLI phases. During
+// pull it stages remote images into a local OCI layout (ArchiveImages) and
+// copies the helper binary; during push it uploads that layout to a target
+// registry (PushImages). The on-disk manifest contract lives in pushspec.
+package push
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"helm-pull-images-cli/internal/pushspec"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"golang.org/x/sync/errgroup"
@@ -24,20 +29,22 @@ var loadLayoutImage = func(layoutPath layout.Path, hash v1.Hash) (v1.Image, erro
 var loadOCILayout = layout.FromPath
 var resolveExecutablePath = os.Executable
 
-func PushImages(ctx context.Context, registry, inputDir string, concurrency int) error {
+func PushImages(ctx context.Context, registry, inputDir string, concurrency int, status ...io.Writer) error {
 	resolvedInputDir, err := resolvePushInputDir(inputDir)
 	if err != nil {
 		return err
 	}
 
-	manifest, err := ReadPushManifest(resolvedInputDir)
+	manifest, err := pushspec.ReadPushManifest(resolvedInputDir)
 	if err != nil {
 		return err
 	}
+	progress := newTransferProgress(statusWriter(status...), "pushing", len(manifest.Images))
+	defer progress.Finish()
 
 	layoutDir := manifest.LayoutDir
 	if layoutDir == "" {
-		layoutDir = OCILayoutDirName()
+		layoutDir = pushspec.OCILayoutDirName()
 	}
 	layoutPath, err := loadOCILayout(filepath.Join(resolvedInputDir, layoutDir))
 	if err != nil {
@@ -49,6 +56,9 @@ func PushImages(ctx context.Context, registry, inputDir string, concurrency int)
 	for _, spec := range manifest.Images {
 		spec := spec
 		group.Go(func() error {
+			progress.Begin(spec.Image)
+			defer progress.End(spec.Image)
+
 			if err := copyImageToRegistry(groupCtx, registry, layoutPath, spec.Image, spec.Target, spec.OCIDigest); err != nil {
 				return fmt.Errorf("push %s: %w", spec.Image, err)
 			}
@@ -97,23 +107,27 @@ func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry s
 	}
 
 	if err := writeRemoteImage(destRef, img, remote.WithContext(ctx), remote.WithAuthFromKeychain(authn.DefaultKeychain)); err != nil {
+		if looksLikeWebsite(err) {
+			return fmt.Errorf("registry %q does not look like a container registry", registry)
+		}
 		return fmt.Errorf("push image %q to registry %q: %w", sourceImage, registry, err)
 	}
 
 	return nil
 }
 
-func ReadPushManifest(inputDir string) (*PushManifest, error) {
-	path := filepath.Join(inputDir, PushManifestFileName())
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read push manifest: %w", err)
+func looksLikeWebsite(err error) bool {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "text/html"):
+		return true
+	case strings.Contains(msg, "invalid character '<'"):
+		return true
+	case strings.Contains(msg, "<!doctype"):
+		return true
+	case strings.Contains(msg, "<html"):
+		return true
+	default:
+		return false
 	}
-
-	var manifest PushManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("parse push manifest: %w", err)
-	}
-
-	return &manifest, nil
 }

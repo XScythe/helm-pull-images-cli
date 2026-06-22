@@ -1,4 +1,4 @@
-package mirror
+package pushspec
 
 import (
 	"encoding/json"

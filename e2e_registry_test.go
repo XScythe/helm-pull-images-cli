@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"helm-pull-images-cli/internal/push"
+	"helm-pull-images-cli/internal/pushspec"
 	"io"
 	"net/http"
 	"os"
@@ -16,7 +18,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"gopkg.in/yaml.v3"
-	"helm-pull-images-cli/internal/mirror"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
@@ -114,7 +115,7 @@ func runRegistryE2ECase(t *testing.T, cliBinary, chart, repoURL, chartVersion, w
 	t.Log("checking artifacts")
 	manifest := checkE2EArtifacts(t, outputDir, minImages)
 
-	pushBinary := filepath.Join(outputDir, mirror.PushBinaryName())
+	pushBinary := filepath.Join(outputDir, push.PushBinaryName())
 	t.Log("pushing mirrored images")
 	cmd := exec.Command(pushBinary, "push", "--registry", e2eRegistryHost)
 	cmd.Env = os.Environ()
@@ -289,20 +290,20 @@ func buildCLIBinary(t *testing.T) string {
 	return binary
 }
 
-func checkE2EArtifacts(t *testing.T, outputDir string, minImages int) *mirror.PushManifest {
+func checkE2EArtifacts(t *testing.T, outputDir string, minImages int) *pushspec.PushManifest {
 	t.Helper()
 
-	if _, err := os.Stat(filepath.Join(outputDir, mirror.PushBinaryName())); err != nil {
+	if _, err := os.Stat(filepath.Join(outputDir, push.PushBinaryName())); err != nil {
 		t.Fatalf("missing push helper binary: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outputDir, mirror.PushManifestFileName())); err != nil {
+	if _, err := os.Stat(filepath.Join(outputDir, pushspec.PushManifestFileName())); err != nil {
 		t.Fatalf("missing push manifest: %v", err)
 	}
-	if info, err := os.Stat(filepath.Join(outputDir, mirror.OCILayoutDirName())); err != nil || !info.IsDir() {
+	if info, err := os.Stat(filepath.Join(outputDir, pushspec.OCILayoutDirName())); err != nil || !info.IsDir() {
 		t.Fatalf("missing OCI layout directory: %v", err)
 	}
 
-	manifest, err := mirror.ReadPushManifest(outputDir)
+	manifest, err := pushspec.ReadPushManifest(outputDir)
 	if err != nil {
 		t.Fatalf("ReadPushManifest() error = %v", err)
 	}
@@ -323,7 +324,7 @@ func checkE2EArtifacts(t *testing.T, outputDir string, minImages int) *mirror.Pu
 	return manifest
 }
 
-func verifyRegistryImages(t *testing.T, registryHost string, manifest *mirror.PushManifest) {
+func verifyRegistryImages(t *testing.T, registryHost string, manifest *pushspec.PushManifest) {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

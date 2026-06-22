@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -67,7 +68,7 @@ func TestPushCmd_RegistryFlagRequired(t *testing.T) {
 	}
 	// Error should mention the missing flag
 	errOutput := output.Stderr + output.Stdout
-	if !containsSubstring(errOutput, "registry") && !containsSubstring(errOutput, "required") {
+	if !strings.Contains(errOutput, "registry") && !strings.Contains(errOutput, "required") {
 		t.Fatalf("error message should mention 'registry' or 'required', got: %s", errOutput)
 	}
 }
@@ -75,10 +76,10 @@ func TestPushCmd_RegistryFlagRequired(t *testing.T) {
 // TestPushCmd_ValidateRegistryInvalid tests invalid registry values are rejected.
 func TestPushCmd_ValidateRegistryInvalid(t *testing.T) {
 	invalidRegistries := []string{
-		"https://example.com",     // cannot include scheme
+		"https://example.com",         // cannot include scheme
 		"http://registry.example.com", // cannot include http/https
-		"example.com/namespace",   // cannot include path
-		"registry.example.com/path", // cannot include path
+		"example.com/namespace",       // cannot include path
+		"registry.example.com/path",   // cannot include path
 	}
 
 	for _, registry := range invalidRegistries {
@@ -240,7 +241,7 @@ func TestPushCmd_HelpFlag(t *testing.T) {
 	}
 	// Help output should contain command description
 	helpOutput := output.Stdout + output.Stderr
-	if !containsSubstring(helpOutput, "Push") || !containsSubstring(helpOutput, "images") {
+	if !strings.Contains(helpOutput, "Push") || !strings.Contains(helpOutput, "images") {
 		t.Fatalf("help output missing expected content: %s", helpOutput)
 	}
 }

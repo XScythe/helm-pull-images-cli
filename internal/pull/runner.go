@@ -1,0 +1,99 @@
+// Package pull renders Helm charts, extracts their referenced container
+// images, and stages those images as OCI layout artifacts for later push.
+//
+// The package is organized around the Runner type, whose collaborators are
+// wired in NewRunner. Responsibilities are split across files:
+//
+//   - runner.go      public API surface, core types, and Runner construction
+//   - pipeline.go    pull workflow orchestration (Runner.Run / Runner.Execute)
+//   - render.go      Helm chart manifest rendering
+//   - chartsource.go chart loading, caching, and repository fallback
+//   - repoindex.go   Helm repository index lookup and version resolution
+//   - outputdir.go   output directory naming and creation
+//   - slices.go      small slice/map utilities
+package pull
+
+import (
+	"context"
+	"io"
+	"sync"
+
+	helmchart "helm.sh/helm/v3/pkg/chart"
+
+	"helm-pull-images-cli/internal/chartimages"
+	"helm-pull-images-cli/internal/push"
+	"helm-pull-images-cli/internal/pushspec"
+)
+
+type Options struct {
+	Chart       string
+	Repo        string
+	Version     string
+	OutputDir   string
+	Concurrency int
+}
+
+type PullResult struct {
+	OutputDir    string
+	Chart        ChartInfo
+	Images       []string
+	ArchiveSpecs []pushspec.ArchiveSpec
+	ManifestPath string
+}
+
+type ChartInfo struct {
+	Name    string
+	Version string
+	Source  string
+}
+
+type loadedChart struct {
+	Chart *helmchart.Chart
+	Info  ChartInfo
+}
+
+type chartSourceAdapter func(ctx context.Context, opts Options) (loadedChart, error)
+
+type Runner struct {
+	searchRepoVersions func(ctx context.Context, repo, chart string) ([]searchResult, error)
+	renderManifest     func(r Runner, ctx context.Context, opts Options) (string, error)
+	extractChartImages func(ctx context.Context, opts Options) ([]string, error)
+	extractImages      func(manifest string) ([]string, error)
+	archiveImages      func(ctx context.Context, images []string, outputDir string, concurrency int, status ...io.Writer) ([]pushspec.ArchiveSpec, error)
+	writePushManifest  func(outputDir string, specs []pushspec.ArchiveSpec) error
+	copySelfExecutable func(outputDir string) (string, error)
+	localChartSource   chartSourceAdapter
+	helmChartSource    chartSourceAdapter
+	chartCache         *loadedCharts
+}
+
+type loadedCharts struct {
+	mu     sync.Mutex
+	byOpts map[string]*loadedChart
+}
+
+func Run(ctx context.Context, opts Options, status ...io.Writer) error {
+	return NewRunner().Run(ctx, opts, status...)
+}
+
+func NewRunner() Runner {
+	r := Runner{
+		searchRepoVersions: helmSearchRepoVersions,
+		renderManifest: func(r Runner, ctx context.Context, opts Options) (string, error) {
+			return r.renderChartManifest(ctx, opts)
+		},
+		extractImages:      chartimages.ExtractImages,
+		archiveImages:      push.ArchiveImages,
+		writePushManifest:  pushspec.WritePushManifest,
+		copySelfExecutable: push.CopySelfExecutable,
+		chartCache:         &loadedCharts{byOpts: make(map[string]*loadedChart)},
+	}
+	r.extractChartImages = func(ctx context.Context, opts Options) ([]string, error) {
+		return r.extractChartAnnotationImages(ctx, opts)
+	}
+	r.localChartSource = localChartSource
+	r.helmChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return loadHelmRepoChart(ctx, opts)
+	}
+	return r
+}

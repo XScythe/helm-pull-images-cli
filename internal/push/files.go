@@ -1,4 +1,4 @@
-package mirror
+package push
 
 import (
 	"fmt"
