@@ -1,8 +1,10 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,11 +15,23 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"gopkg.in/yaml.v3"
 	"helm-pull-images-cli/internal/mirror"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/getter"
+	"helm.sh/helm/v3/pkg/repo"
 )
 
 const (
-	e2eRegistryHost = "localhost:5000"
+	e2eRegistryHost           = "localhost:5000"
+	e2eSmallChartsRepoURL     = "https://prometheus-community.github.io/helm-charts"
+	e2eLargeChartsRepoURL     = "https://prometheus-community.github.io/helm-charts"
+	e2eSmallChartName         = "prometheus-node-exporter"
+	e2eLargeRemoteChartName   = "prometheus"
+	e2eSmallChartMinImages    = 1
+	e2eLargeRemoteMinImageSet = 5
 )
 
 func TestRegistryE2E(t *testing.T) {
@@ -40,28 +54,65 @@ func TestRegistryE2E(t *testing.T) {
 		})
 	}
 
-	t.Log("building source image")
-	sourceImage := buildSourceImage(t)
-	t.Logf("built source image %s", sourceImage)
-	chartDir := writeLocalChart(t, sourceImage)
-	outputDir := t.TempDir()
-
 	cliBinary := buildCLIBinary(t)
+	localChartRoot, localChartName, localChartVersion := preparePopularLocalChart(t, e2eSmallChartName, e2eSmallChartsRepoURL)
+	largeChartVersion := resolveStableChartVersion(t, e2eLargeChartsRepoURL, e2eLargeRemoteChartName)
 
+	testCases := []struct {
+		name       string
+		chart      string
+		repo       string
+		version    string
+		workingDir string
+		minImages  int
+	}{
+		{
+			name:       "small local popular chart",
+			chart:      localChartName,
+			version:    localChartVersion,
+			workingDir: localChartRoot,
+			minImages:  e2eSmallChartMinImages,
+		},
+		{
+			name:      "large remote popular chart",
+			chart:     e2eLargeRemoteChartName,
+			repo:      e2eLargeChartsRepoURL,
+			version:   largeChartVersion,
+			minImages: e2eLargeRemoteMinImageSet,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			runRegistryE2ECase(t, cliBinary, tc.chart, tc.repo, tc.version, tc.workingDir, tc.minImages)
+		})
+	}
+}
+
+func runRegistryE2ECase(t *testing.T, cliBinary, chart, repoURL, chartVersion, workingDir string, minImages int) {
+	t.Helper()
+
+	outputDir := t.TempDir()
 	t.Log("rendering chart and archiving images")
-	pullCmd := exec.Command(cliBinary, "pull",
-		"--chart", chartDir,
-		"--output-dir", outputDir,
-		"--release-name", "mirror",
-		"--namespace", "default",
-	)
+	pullArgs := []string{"pull", "--chart", chart, "--output-dir", outputDir}
+	if repoURL != "" {
+		pullArgs = append(pullArgs, "--repo", repoURL)
+	}
+	if chartVersion != "" {
+		pullArgs = append(pullArgs, "--version", chartVersion)
+	}
+	pullCmd := exec.Command(cliBinary, pullArgs...)
+	if workingDir != "" {
+		pullCmd.Dir = workingDir
+	}
 	pullOutput, err := pullCmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("pull command failed: %v\n%s", err, string(pullOutput))
+		t.Fatalf("pull command failed: %v\nargs: %v\n%s", err, pullArgs, string(pullOutput))
 	}
 
 	t.Log("checking artifacts")
-	checkE2EArtifacts(t, outputDir, sourceImage)
+	manifest := checkE2EArtifacts(t, outputDir, minImages)
 
 	pushBinary := filepath.Join(outputDir, mirror.PushBinaryName())
 	t.Log("pushing mirrored images")
@@ -72,8 +123,98 @@ func TestRegistryE2E(t *testing.T) {
 		t.Fatalf("push helper failed: %v\n%s", err, string(output))
 	}
 
-	t.Log("verifying registry image")
-	verifyRegistryImage(t, e2eRegistryHost, sourceImage)
+	t.Log("verifying registry images")
+	verifyRegistryImages(t, e2eRegistryHost, manifest)
+}
+
+func preparePopularLocalChart(t *testing.T, chartName, repoURL string) (string, string, string) {
+	t.Helper()
+
+	chartVersion := resolveStableChartVersion(t, repoURL, chartName)
+	chartURL, err := repo.FindChartInRepoURL(repoURL, chartName, chartVersion, "", "", "", getter.All(cli.New()))
+	if err != nil {
+		t.Fatalf("find chart URL for %s/%s:%s: %v", repoURL, chartName, chartVersion, err)
+	}
+
+	archive := downloadChartArchive(t, chartURL)
+	loadedChart, err := loader.LoadArchive(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("load chart archive %s: %v", chartURL, err)
+	}
+
+	rootDir := t.TempDir()
+	if err := chartutil.SaveDir(loadedChart, rootDir); err != nil {
+		t.Fatalf("save chart %q locally: %v", loadedChart.Metadata.Name, err)
+	}
+
+	return rootDir, loadedChart.Metadata.Name, chartVersion
+}
+
+func resolveStableChartVersion(t *testing.T, repoURL, chartName string) string {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(repoURL, "/")+"/index.yaml", nil)
+	if err != nil {
+		t.Fatalf("prepare chart index request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("fetch chart index: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("fetch chart index: %s: %s", resp.Status, string(body))
+	}
+
+	var index struct {
+		Entries map[string][]struct {
+			Version string `yaml:"version"`
+		} `yaml:"entries"`
+	}
+	if err := yaml.NewDecoder(resp.Body).Decode(&index); err != nil {
+		t.Fatalf("decode chart index: %v", err)
+	}
+
+	results := index.Entries[chartName]
+	for _, result := range results {
+		if result.Version != "" && !strings.Contains(result.Version, "-") {
+			return result.Version
+		}
+	}
+
+	t.Fatalf("no stable version found for %s/%s", repoURL, chartName)
+	return ""
+}
+
+func downloadChartArchive(t *testing.T, chartURL string) []byte {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chartURL, nil)
+	if err != nil {
+		t.Fatalf("prepare chart archive request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("fetch chart archive: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("fetch chart archive: %s: %s", resp.Status, string(body))
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read chart archive response: %v", err)
+	}
+	return data
 }
 
 func ensureRegistry(t *testing.T) (string, error) {
@@ -119,7 +260,7 @@ func registryIsReady() bool {
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	return resp.StatusCode == http.StatusOK
 }
 
@@ -137,34 +278,6 @@ func waitForRegistry(t *testing.T) {
 	t.Fatalf("registry at %s did not become ready", e2eRegistryHost)
 }
 
-func writeLocalChart(t *testing.T, image string) string {
-	t.Helper()
-
-	chartDir := t.TempDir()
-	mustWrite(t, filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
-name: e2e-chart
-version: 0.1.0
-`))
-	mustWrite(t, filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(fmt.Sprintf(`apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: e2e
-spec:
-  selector:
-    matchLabels:
-      app: e2e
-  template:
-    metadata:
-      labels:
-        app: e2e
-    spec:
-      containers:
-        - name: app
-          image: %s
-`, image)))
-	return chartDir
-}
-
 func buildCLIBinary(t *testing.T) string {
 	t.Helper()
 
@@ -176,43 +289,7 @@ func buildCLIBinary(t *testing.T) string {
 	return binary
 }
 
-func buildSourceImage(t *testing.T) string {
-	t.Helper()
-
-	image := fmt.Sprintf("%s/e2e/source:%d", e2eRegistryHost, time.Now().UnixNano())
-	buildDir := t.TempDir()
-	mustWrite(t, filepath.Join(buildDir, "Dockerfile"), []byte(`FROM scratch
-COPY payload.txt /payload.txt
-`))
-	mustWrite(t, filepath.Join(buildDir, "payload.txt"), []byte("e2e"))
-
-	cmd := exec.Command("docker", "build", "-t", image, buildDir)
-	t.Logf("docker build %s", image)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("docker build %s: %v: %s", image, err, string(output))
-	}
-
-	cmd = exec.Command("docker", "push", image)
-	t.Logf("docker push %s", image)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("docker push %s: %v: %s", image, err, string(output))
-	}
-
-	return image
-}
-
-func mustWrite(t *testing.T, path string, data []byte) {
-	t.Helper()
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", path, err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("WriteFile(%s): %v", path, err)
-	}
-}
-
-func checkE2EArtifacts(t *testing.T, outputDir, sourceImage string) {
+func checkE2EArtifacts(t *testing.T, outputDir string, minImages int) *mirror.PushManifest {
 	t.Helper()
 
 	if _, err := os.Stat(filepath.Join(outputDir, mirror.PushBinaryName())); err != nil {
@@ -229,56 +306,70 @@ func checkE2EArtifacts(t *testing.T, outputDir, sourceImage string) {
 	if err != nil {
 		t.Fatalf("ReadPushManifest() error = %v", err)
 	}
-	if len(manifest.Images) != 1 {
-		t.Fatalf("push manifest images len = %d, want 1", len(manifest.Images))
+	if len(manifest.Images) < minImages {
+		t.Fatalf("push manifest images len = %d, want at least %d", len(manifest.Images), minImages)
 	}
-	if manifest.Images[0].Image != sourceImage {
-		t.Fatalf("push manifest image = %q, want %q", manifest.Images[0].Image, sourceImage)
+	for i, spec := range manifest.Images {
+		if spec.Image == "" {
+			t.Fatalf("push manifest image[%d] has empty source image", i)
+		}
+		if spec.Target == "" {
+			t.Fatalf("push manifest image[%d] has empty target", i)
+		}
+		if spec.OCIDigest == "" {
+			t.Fatalf("push manifest image[%d] has empty oci digest", i)
+		}
 	}
-	if manifest.Images[0].OCIDigest == "" {
-		t.Fatal("push manifest missing oci digest")
-	}
+	return manifest
 }
 
-func verifyRegistryImage(t *testing.T, registryHost, sourceImage string) {
+func verifyRegistryImages(t *testing.T, registryHost string, manifest *mirror.PushManifest) {
 	t.Helper()
 
-	specs, err := mirror.BuildSpecs([]string{sourceImage})
-	if err != nil {
-		t.Fatalf("BuildSpecs() error = %v", err)
-	}
-	spec := specs[0]
-	destRef, err := name.NewTag(fmt.Sprintf("%s/%s", registryHost, spec.Target), name.Insecure)
-	if err != nil {
-		t.Fatalf("parse destination reference: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	got, err := remote.Image(destRef, remote.WithContext(ctx))
-	if err != nil {
-		t.Fatalf("remote.Image(%s): %v", destRef.String(), err)
+	checked := 0
+	for _, spec := range manifest.Images {
+		destRef, err := name.ParseReference(fmt.Sprintf("%s/%s", registryHost, spec.Target), name.Insecure)
+		if err != nil {
+			t.Fatalf("parse destination reference for %q: %v", spec.Target, err)
+		}
+		destImage, err := remote.Image(destRef, remote.WithContext(ctx))
+		if err != nil {
+			t.Fatalf("remote.Image(%s): %v", destRef.String(), err)
+		}
+		if _, err := destImage.ConfigFile(); err != nil {
+			t.Fatalf("destination image config %s: %v", destRef.String(), err)
+		}
+
+		sourceRef, err := name.ParseReference(spec.Image)
+		if err != nil {
+			t.Fatalf("parse source reference for %q: %v", spec.Image, err)
+		}
+		sourceImage, err := remote.Image(sourceRef, remote.WithContext(ctx))
+		if err != nil {
+			t.Fatalf("remote.Image(%s): %v", sourceRef.String(), err)
+		}
+
+		destDigest, err := destImage.Digest()
+		if err != nil {
+			t.Fatalf("destination digest %s: %v", destRef.String(), err)
+		}
+		sourceDigest, err := sourceImage.Digest()
+		if err != nil {
+			t.Fatalf("source digest %s: %v", sourceRef.String(), err)
+		}
+		if destDigest != sourceDigest {
+			t.Fatalf("uploaded digest for %s = %s, want %s", spec.Image, destDigest, sourceDigest)
+		}
+		if spec.OCIDigest != sourceDigest.String() {
+			t.Fatalf("manifest oci digest for %s = %s, want %s", spec.Image, spec.OCIDigest, sourceDigest.String())
+		}
+		checked++
 	}
 
-	sourceRef, err := name.NewTag(sourceImage)
-	if err != nil {
-		t.Fatalf("parse source reference: %v", err)
-	}
-	source, err := remote.Image(sourceRef, remote.WithContext(ctx))
-	if err != nil {
-		t.Fatalf("remote.Image(%s): %v", sourceRef.String(), err)
-	}
-
-	gotDigest, err := got.Digest()
-	if err != nil {
-		t.Fatalf("destination digest: %v", err)
-	}
-	sourceDigest, err := source.Digest()
-	if err != nil {
-		t.Fatalf("source digest: %v", err)
-	}
-	if gotDigest != sourceDigest {
-		t.Fatalf("uploaded digest = %s, want %s", gotDigest, sourceDigest)
+	if checked != len(manifest.Images) {
+		t.Fatalf("verified %d images, want %d", checked, len(manifest.Images))
 	}
 }

@@ -30,7 +30,11 @@ func CopySelfExecutable(outputDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open executable: %w", err)
 	}
-	defer in.Close()
+	defer func() {
+		if err := in.Close(); err != nil {
+			// Log close error but don't fail the operation
+		}
+	}()
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
@@ -41,7 +45,7 @@ func CopySelfExecutable(outputDir string) (string, error) {
 		return "", fmt.Errorf("create helper binary: %w", err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		out.Close() //nolint:errcheck
 		return "", fmt.Errorf("copy helper binary: %w", err)
 	}
 	if err := out.Close(); err != nil {

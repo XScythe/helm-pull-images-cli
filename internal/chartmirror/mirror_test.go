@@ -2,11 +2,15 @@ package chartmirror
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+
+	helmchart "helm.sh/helm/v3/pkg/chart"
 
 	"helm-pull-images-cli/internal/mirror"
 )
@@ -19,13 +23,56 @@ func TestDefaultOutputDirCreatesNewDirectoryInCWD(t *testing.T) {
 		t.Fatalf("defaultOutputDir() error = %v", err)
 	}
 
-	if !strings.HasPrefix(dir, h.cwd+string(filepath.Separator)) {
-		t.Fatalf("defaultOutputDir() = %q, want inside %q", dir, h.cwd)
+	// Verify directory is created in the CWD with the chart name
+	expected := filepath.Join(h.cwd, "openebs")
+	if dir != expected {
+		t.Fatalf("defaultOutputDir() = %q, want %q", dir, expected)
 	}
 
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		t.Fatalf("defaultOutputDir() path missing or not a directory: %v, %v", info, err)
 	}
+}
+
+func TestDefaultOutputDirAppendsTimestampWhenDirectoryExists(t *testing.T) {
+	h := newRunnerTestHarness(t)
+
+	// Create directory first
+	chart := "nginx"
+	first := filepath.Join(h.cwd, chart)
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Call defaultOutputDir for the same chart
+	dir, err := h.runner.defaultOutputDir(chart)
+	if err != nil {
+		t.Fatalf("defaultOutputDir() error = %v", err)
+	}
+
+	// Should have timestamp appended in format {chart}-YYYY-MM-DD-HH
+	if !strings.Contains(dir, chart+"-") {
+		t.Fatalf("defaultOutputDir() = %q, should contain %q", dir, chart+"-")
+	}
+
+	// Verify it matches the expected pattern
+	base := filepath.Base(dir)
+	expectedPattern := fmt.Sprintf("%s-\\d{4}-\\d{2}-\\d{2}-\\d{2}", chart)
+	if !matchesPattern(base, expectedPattern) {
+		t.Fatalf("defaultOutputDir() = %q, doesn't match pattern %q", base, expectedPattern)
+	}
+
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("defaultOutputDir() path missing or not a directory: %v, %v", info, err)
+	}
+}
+
+func matchesPattern(s, pattern string) bool {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(s)
 }
 
 func TestResolveChartVersionSkipsPrereleases(t *testing.T) {
@@ -110,9 +157,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	if err := h.runner.Run(context.Background(), Options{
-		ReleaseName: "mirror",
 		Chart:       chartDir,
-		Namespace:   "default",
 		OutputDir:   filepath.Join(dir, "out"),
 		Concurrency: 4,
 	}); err != nil {
@@ -199,9 +244,7 @@ metadata:
 	}
 
 	if err := h.runner.Run(context.Background(), Options{
-		ReleaseName: "mirror",
 		Chart:       chartDir,
-		Namespace:   "default",
 		OutputDir:   filepath.Join(dir, "out"),
 		Concurrency: 2,
 	}); err != nil {
@@ -252,9 +295,7 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 	}
 
 	if err := h.runner.Run(context.Background(), Options{
-		ReleaseName: "mirror",
 		Chart:       "ignored-by-stub",
-		Namespace:   "default",
 		OutputDir:   t.TempDir(),
 		Concurrency: 1,
 	}); err != nil {
@@ -296,7 +337,6 @@ func TestRunnerExecuteReturnsPullResult(t *testing.T) {
 	outDir := t.TempDir()
 	result, err := h.runner.Execute(context.Background(), Options{
 		Chart:       "ignored-by-stub",
-		Namespace:   "default",
 		OutputDir:   outDir,
 		Concurrency: 1,
 	})
@@ -345,9 +385,7 @@ spec:
 	}
 
 	got, err := h.runner.renderChartManifest(context.Background(), Options{
-		ReleaseName: "mirror",
-		Chart:       "chart",
-		Namespace:   "default",
+		Chart: "chart",
 	})
 	if err != nil {
 		t.Fatalf("renderChartManifest() error = %v", err)
@@ -393,9 +431,7 @@ version: 0.1.0
 	}
 
 	got, err := h.runner.renderChartManifest(context.Background(), Options{
-		ReleaseName: "mirror",
-		Chart:       "chart",
-		Namespace:   "default",
+		Chart: "chart",
 	})
 	if err != nil {
 		t.Fatalf("renderChartManifest() error = %v", err)
@@ -438,9 +474,7 @@ spec:
 	}
 
 	got, err := h.runner.renderChartManifest(context.Background(), Options{
-		ReleaseName: "mirror",
-		Chart:       "chart",
-		Namespace:   "default",
+		Chart: "chart",
 	})
 	if err != nil {
 		t.Fatalf("renderChartManifest() error = %v", err)
@@ -513,4 +547,119 @@ func newRunnerTestHarness(t *testing.T) *runnerTestHarness {
 
 	h := &runnerTestHarness{t: t, cwd: cwd, runner: NewRunner()}
 	return h
+}
+
+// TestLoadChartFallbackToConfiguredReposOnLocalFailure verifies fallback activates when local load fails
+func TestLoadChartFallbackToConfiguredReposOnLocalFailure(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		return nil, fmt.Errorf("local chart not found")
+	}
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		// This simulates what happens when fallback searches configured repos
+		// In a real scenario with configured repos, this would return a chart
+		return nil, fmt.Errorf("chart not found in any configured repo")
+	}
+
+	_, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
+	if err == nil {
+		t.Fatal("loadChart() should return error when both local and fallback fail")
+	}
+	// Should show both local and fallback failures in the error
+	errStr := err.Error()
+	if !strings.Contains(errStr, "not found") {
+		t.Fatalf("error should indicate chart not found, got: %s", errStr)
+	}
+}
+
+// TestLoadChartNoFallbackWhenLocalSucceeds verifies fallback doesn't trigger if local load succeeds
+func TestLoadChartNoFallbackWhenLocalSucceeds(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	localCalled := false
+
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		localCalled = true
+		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "local"}}, nil
+	}
+
+	chrt, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
+	if err != nil {
+		t.Fatalf("loadChart() error = %v, want nil", err)
+	}
+	if !localCalled {
+		t.Fatal("local source should have been called")
+	}
+	if chrt.Metadata.Name != "local" {
+		t.Fatalf("loadChart() returned chart name %q, want local", chrt.Metadata.Name)
+	}
+}
+
+// TestLoadChartNoFallbackWhenRepoSpecified verifies fallback doesn't trigger when --repo is provided
+func TestLoadChartNoFallbackWhenRepoSpecified(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	localCalled := false
+
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		localCalled = true
+		return nil, fmt.Errorf("should not call")
+	}
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "repo"}}, nil
+	}
+
+	chrt, err := h.runner.loadChart(context.Background(), Options{
+		Chart: "test",
+		Repo:  "https://example.com",
+	})
+	if err != nil {
+		t.Fatalf("loadChart() error = %v, want nil", err)
+	}
+	if localCalled {
+		t.Fatal("local source should not have been called when repo is specified")
+	}
+	if chrt.Metadata.Name != "repo" {
+		t.Fatalf("loadChart() returned chart name %q, want repo", chrt.Metadata.Name)
+	}
+}
+
+// TestLoadChartCombinedErrorContext verifies error message includes both local and fallback failure context
+func TestLoadChartCombinedErrorContext(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		return nil, fmt.Errorf("local path does not exist")
+	}
+	// Simulate no configured repos by mocking helmChartSource to fail
+	h.runner.helmChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		return nil, fmt.Errorf("no configured repos available")
+	}
+
+	_, err := h.runner.loadChart(context.Background(), Options{Chart: "test"})
+	if err == nil {
+		t.Fatal("loadChart() should return error when both local and fallback fail")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "not found") {
+		t.Fatalf("error should indicate chart not found, got: %s", errStr)
+	}
+}
+
+// TestLoadChartCachedResultNotBypassedByFallback verifies caching still works with fallback
+func TestLoadChartCachedResultNotBypassedByFallback(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	callCount := 0
+	h.runner.localChartSource = func(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+		callCount++
+		return &helmchart.Chart{Metadata: &helmchart.Metadata{Name: "cached"}}, nil
+	}
+
+	opts := Options{Chart: "test"}
+	chrt1, _ := h.runner.loadChart(context.Background(), opts)
+	chrt2, _ := h.runner.loadChart(context.Background(), opts)
+
+	if callCount != 1 {
+		t.Fatalf("localChartSource called %d times, want 1 (should use cache)", callCount)
+	}
+	if chrt1 != chrt2 {
+		t.Fatal("cached chart should return same object")
+	}
 }

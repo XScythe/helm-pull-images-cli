@@ -1,36 +1,56 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 	"helm-pull-images-cli/internal/chartmirror"
+	"helm-pull-images-cli/internal/config"
+	"helm-pull-images-cli/internal/validation"
 )
 
 var (
 	pullChart       string
 	pullRepo        string
 	pullVersion     string
-	pullNamespace   string
 	pullOutputDir   string
-	pullRelease     string
 	pullConcurrency int
+	pullVerbose     bool
 )
 
 var pullCmd = &cobra.Command{
 	Use:   "pull",
 	Short: "Render a chart and mirror its images",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if pullChart == "" {
-			return fmt.Errorf("--chart is required")
+	Long:  "Render a Helm chart and extract all referenced container images. Requires either --repo or locally configured Helm repositories.",
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// Validate all flags
+		if err := validation.ValidateChartName("--chart", pullChart); err != nil {
+			return err
 		}
+		if pullRepo != "" {
+			if err := validation.ValidateURL("--repo", pullRepo); err != nil {
+				return err
+			}
+		}
+		if err := validation.ValidateVersion("--version", pullVersion); err != nil {
+			return err
+		}
+		if err := validation.ValidateConcurrency("--concurrency", pullConcurrency); err != nil {
+			return err
+		}
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := config.New().WithVerbose(pullVerbose)
+		cfg.Logger.Info("pulling chart",
+			"chart", pullChart,
+			"repo", pullRepo,
+			"version", pullVersion,
+			"concurrency", pullConcurrency,
+		)
 
 		return chartmirror.Run(cmd.Context(), chartmirror.Options{
-			ReleaseName: pullRelease,
 			Chart:       pullChart,
 			Repo:        pullRepo,
 			Version:     pullVersion,
-			Namespace:   pullNamespace,
 			OutputDir:   pullOutputDir,
 			Concurrency: pullConcurrency,
 		})
@@ -39,11 +59,10 @@ var pullCmd = &cobra.Command{
 
 func init() {
 	pullCmd.Flags().StringVar(&pullChart, "chart", "", "Helm chart name")
-	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL")
+	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL (optional; if not provided, searches configured Helm repositories)")
 	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
-	pullCmd.Flags().StringVar(&pullNamespace, "namespace", "default", "Release namespace")
-	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script (defaults to a new directory in the current working directory)")
-	pullCmd.Flags().StringVar(&pullRelease, "release-name", "mirror", "Helm release name")
+	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script")
 	pullCmd.Flags().IntVar(&pullConcurrency, "concurrency", 4, "Number of images to fetch and stage concurrently")
-	_ = pullCmd.MarkFlagRequired("chart")
+	pullCmd.Flags().BoolVar(&pullVerbose, "verbose", false, "Enable verbose logging")
+	pullCmd.MarkFlagRequired("chart")
 }

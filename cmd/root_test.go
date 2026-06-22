@@ -1,0 +1,79 @@
+package cmd
+
+import (
+	"testing"
+)
+
+// TestRootCmd_HasSubcommands verifies root command has the expected subcommands.
+func TestRootCmd_HasSubcommands(t *testing.T) {
+	commands := []string{"pull", "push"}
+	for _, cmdName := range commands {
+		found := false
+		for _, cmd := range rootCmd.Commands() {
+			if cmd.Name() == cmdName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected subcommand %q not found in root command", cmdName)
+		}
+	}
+}
+
+// TestRootCmd_HelpFlag tests that root command supports --help flag.
+func TestRootCmd_HelpFlag(t *testing.T) {
+	output := ExecuteCommand(rootCmd, []string{"--help"})
+	if output.Err != nil {
+		t.Fatalf("--help should not produce error: %v", output.Err)
+	}
+	// Help output should mention subcommands
+	helpOutput := output.Stdout + output.Stderr
+	if !containsSubstring(helpOutput, "pull") || !containsSubstring(helpOutput, "push") {
+		t.Fatalf("help output missing subcommand mentions: %s", helpOutput)
+	}
+}
+
+// TestRootCmd_InvalidSubcommand tests that invalid subcommands are rejected.
+func TestRootCmd_InvalidSubcommand(t *testing.T) {
+	output := ExecuteCommand(rootCmd, []string{"invalid-command"})
+	if output.Err == nil {
+		t.Fatalf("expected error for invalid subcommand, got none")
+	}
+}
+
+// TestRootCmd_NoArgs verifies that root command without args produces error or help.
+func TestRootCmd_NoArgs(t *testing.T) {
+	output := ExecuteCommand(rootCmd, []string{})
+	// Root command without args should produce an error or show usage
+	errOutput := output.Stderr + output.Stdout
+	if output.Err == nil && len(errOutput) == 0 {
+		t.Fatalf("expected error or help output when no args provided, got neither")
+	}
+}
+
+// TestRootCmd_PullSubcommand tests that 'pull' subcommand can be invoked.
+func TestRootCmd_PullSubcommand(t *testing.T) {
+	// Test that 'pull --help' works from root
+	output := ExecuteCommand(rootCmd, []string{"pull", "--help"})
+	if output.Err != nil {
+		t.Fatalf("pull subcommand --help failed: %v", output.Err)
+	}
+	helpOutput := output.Stdout + output.Stderr
+	if !containsSubstring(helpOutput, "chart") {
+		t.Fatalf("pull help missing 'chart' flag: %s", helpOutput)
+	}
+}
+
+// TestRootCmd_PushSubcommand tests that 'push' subcommand can be invoked.
+func TestRootCmd_PushSubcommand(t *testing.T) {
+	// Test that 'push --help' works from root
+	output := ExecuteCommand(rootCmd, []string{"push", "--help"})
+	if output.Err != nil {
+		t.Fatalf("push subcommand --help failed: %v", output.Err)
+	}
+	helpOutput := output.Stdout + output.Stderr
+	if !containsSubstring(helpOutput, "registry") {
+		t.Fatalf("push help missing 'registry' flag: %s", helpOutput)
+	}
+}

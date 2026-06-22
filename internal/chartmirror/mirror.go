@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	helmchart "helm.sh/helm/v3/pkg/chart"
@@ -27,11 +28,9 @@ import (
 )
 
 type Options struct {
-	ReleaseName string
 	Chart       string
 	Repo        string
 	Version     string
-	Namespace   string
 	OutputDir   string
 	Concurrency int
 }
@@ -206,12 +205,15 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 	}
 
 	caps := chartutil.DefaultCapabilities.Copy()
+	// Hardcoded release name and namespace: these don't affect image extraction
+	// (which is the CLI's sole purpose) as they only influence template rendering
+	// metadata. Users cannot customize these values.
 	renderValues, err := chartutil.ToRenderValuesWithSchemaValidation(
 		chrt,
 		map[string]interface{}{},
 		chartutil.ReleaseOptions{
-			Name:      opts.ReleaseName,
-			Namespace: opts.Namespace,
+			Name:      "mirror",
+			Namespace: "default",
 			Revision:  1,
 			IsInstall: true,
 		},
@@ -273,12 +275,22 @@ func (r Runner) loadChart(ctx context.Context, opts Options) (*helmchart.Chart, 
 	}
 
 	if opts.Repo == "" {
-		chrt, err := r.localChartSource(ctx, opts)
-		if err != nil {
-			return nil, err
+		chrt, localErr := r.localChartSource(ctx, opts)
+		if localErr == nil {
+			r.setCachedChart(opts, chrt)
+			return chrt, nil
 		}
-		r.setCachedChart(opts, chrt)
-		return chrt, nil
+
+		// Fallback to configured repos if local load fails
+		chrt, fallbackErr := r.loadChartFromConfiguredRepos(ctx, opts)
+		if fallbackErr == nil {
+			r.setCachedChart(opts, chrt)
+			return chrt, nil
+		}
+
+		// Return combined error context
+		return nil, fmt.Errorf("chart %q not found: local path failed: %w; configured repos failed: %w",
+			opts.Chart, localErr, fallbackErr)
 	}
 	chrt, err := r.helmChartSource(ctx, opts)
 	if err != nil {
@@ -297,7 +309,7 @@ func helmSearchRepoVersions(ctx context.Context, repoURL, chart string) ([]searc
 	if err != nil {
 		return nil, fmt.Errorf("fetch chart index: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -353,11 +365,26 @@ func defaultOutputDir(chart string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get current working directory: %w", err)
 	}
-	prefix := "helm-pull-images-"
-	if chart != "" {
-		prefix += sanitizeName(chart) + "-"
+
+	dirName := sanitizeName(chart)
+	if dirName == "" {
+		dirName = "chart"
 	}
-	return os.MkdirTemp(cwd, prefix)
+
+	// Try the base name first
+	outputDir := filepath.Join(cwd, dirName)
+	if _, err := os.Stat(outputDir); err == nil {
+		// Directory exists, append date and hour
+		timestamp := time.Now().Format("2006-01-02-15")
+		outputDir = filepath.Join(cwd, dirName+"-"+timestamp)
+	}
+
+	// Create the directory
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return "", fmt.Errorf("create output directory: %w", err)
+	}
+
+	return outputDir, nil
 }
 
 func sanitizeName(value string) string {
@@ -455,7 +482,7 @@ func loadHelmRepoChart(ctx context.Context, opts Options, resolveVersion func(ct
 	if err != nil {
 		return nil, fmt.Errorf("fetch chart archive: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -463,4 +490,53 @@ func loadHelmRepoChart(ctx context.Context, opts Options, resolveVersion func(ct
 	}
 
 	return loader.LoadArchive(resp.Body)
+}
+
+func (r Runner) loadChartFromConfiguredRepos(ctx context.Context, opts Options) (*helmchart.Chart, error) {
+	configRepos, err := loadConfiguredRepos()
+	if err != nil {
+		return nil, fmt.Errorf("read helm repositories config: %w", err)
+	}
+
+	if len(configRepos) == 0 {
+		return nil, fmt.Errorf("no configured helm repositories found")
+	}
+
+	var repoErrors []string
+	for _, configRepo := range configRepos {
+		chrt, err := loadHelmRepoChart(ctx, Options{
+			Chart:   opts.Chart,
+			Repo:    configRepo.URL,
+			Version: opts.Version,
+		}, func(ctx context.Context, repoURL, chart string) (string, error) {
+			return r.resolveChartVersion(ctx, repoURL, chart)
+		})
+
+		if err == nil {
+			return chrt, nil
+		}
+		repoErrors = append(repoErrors, fmt.Sprintf("%s: %v", configRepo.Name, err))
+	}
+
+	return nil, fmt.Errorf("chart %q not found in configured repos: %s",
+		opts.Chart, strings.Join(repoErrors, "; "))
+}
+
+func loadConfiguredRepos() ([]*repo.Entry, error) {
+	settings := cli.New()
+	repoFile := settings.RepositoryConfig
+
+	repoIndex, err := repo.LoadFile(repoFile)
+	if err != nil {
+		// Return actual error so caller can distinguish between config issues
+		// and legitimately no configured repos
+		return nil, err
+	}
+
+	if len(repoIndex.Repositories) == 0 {
+		// No configured repos is not an error condition
+		return nil, nil
+	}
+
+	return repoIndex.Repositories, nil
 }

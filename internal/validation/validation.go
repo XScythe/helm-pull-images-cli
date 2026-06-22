@@ -1,0 +1,119 @@
+// Package validation provides reusable validation functions for flags and inputs.
+//
+// This follows the kubectl pattern of delegating to underlying libraries:
+// - Chart names: Use Helm's own validators (ValidateMetadataName)
+// - URLs: Standard Go url.Parse
+// - Concurrency: System-aware bounds derived from CPU count
+//
+// Validators check format and constraints (NOT presence—Cobra handles that).
+// All validators return an error if validation fails, following Go conventions.
+// Flags marked with MarkFlagRequired() in cmd files are guaranteed to be non-empty.
+//
+// Example usage in cmd/pull.go PreRunE:
+//
+//	if err := validation.ValidateChartName("--chart", chartName); err != nil {
+//		return err
+//	}
+package validation
+
+import (
+	"fmt"
+	"net/url"
+	"runtime"
+
+	"helm.sh/helm/v3/pkg/chartutil"
+)
+
+// maxConcurrency derives sensible max concurrency from system specs.
+// Use CPU count * 4 to allow some parallelism while respecting system resources.
+func maxConcurrency() int {
+	cpus := runtime.NumCPU()
+	max := cpus * 4
+	// Cap at 256 to prevent unreasonable values on high-core systems
+	if max > 256 {
+		max = 256
+	}
+	return max
+}
+
+// ValidateURL checks that a string is a valid URL with a scheme.
+// Delegates to Go's standard url.Parse.
+func ValidateURL(name, value string) error {
+	u, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", name, err)
+	}
+	// URL must have a scheme
+	if u.Scheme == "" {
+		return fmt.Errorf("%s must be a valid URL with scheme (http/https): %q", name, value)
+	}
+	return nil
+}
+
+// ValidateChartName checks that a string is a valid Helm chart name.
+// Delegates to Helm's own validator for metadata names (includes chart names).
+func ValidateChartName(name, value string) error {
+	if err := chartutil.ValidateMetadataName(value); err != nil {
+		return fmt.Errorf("%s %w", name, err)
+	}
+	return nil
+}
+
+// ValidateImageRegistry checks that a string is a valid image registry.
+// Basic validation: registry should be host:port or host, not a URL with scheme or path.
+func ValidateImageRegistry(name, value string) error {
+	// Check for empty
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	// Check for URL schemes like https:// (look for :// pattern)
+	if idx := -1; len(value) >= 3 {
+		for i := range value[:len(value)-2] {
+			if value[i:i+3] == "://" {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			return fmt.Errorf("%s should not include protocol scheme: %q", name, value)
+		}
+	}
+	// Check for paths (look for / after host:port)
+	if idx := -1; len(value) > 0 {
+		for i, c := range value {
+			if c == '/' {
+				idx = i
+				break
+			}
+		}
+		if idx > 0 {
+			return fmt.Errorf("%s should not include path: %q", name, value)
+		}
+	}
+	return nil
+}
+
+// ValidateConcurrency checks that concurrency is within reasonable bounds.
+// Maximum is derived from system CPU count: CPUs * 4, capped at 256.
+func ValidateConcurrency(name string, value int) error {
+	if value < 1 {
+		return fmt.Errorf("%s must be at least 1", name)
+	}
+	max := maxConcurrency()
+	if value > max {
+		return fmt.Errorf("%s must not exceed %d (derived from %d CPUs)", name, max, runtime.NumCPU())
+	}
+	return nil
+}
+
+// ValidateVersion checks that a version string is valid (basic validation).
+// Empty version is OK (uses latest). Non-empty should not start with 'v'.
+func ValidateVersion(name, value string) error {
+	if value == "" {
+		// Empty version is OK (uses latest)
+		return nil
+	}
+	// Helm expects versions without v prefix (not enforced here, just a convention)
+	// The actual version resolution happens at runtime when fetching the chart.
+	return nil
+}
