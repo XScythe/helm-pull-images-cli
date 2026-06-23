@@ -64,6 +64,7 @@ type Runner struct {
 	copySelfExecutable func(outputDir string) (string, error)
 	localChartSource   chartSourceAdapter
 	helmChartSource    chartSourceAdapter
+	ociChartSource     chartSourceAdapter
 	chartCache         *loadedCharts
 }
 
@@ -94,6 +95,9 @@ func NewRunner() Runner {
 	r.localChartSource = localChartSource
 	r.helmChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
 		return loadHelmRepoChart(ctx, opts)
+	}
+	r.ociChartSource = func(ctx context.Context, opts Options) (loadedChart, error) {
+		return loadOCIChart(ctx, opts)
 	}
 	return r
 }

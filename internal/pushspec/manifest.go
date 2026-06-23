@@ -45,7 +45,7 @@ func PushManifestFileName() string {
 func WritePushManifest(outputDir string, specs []ArchiveSpec) error {
 	manifest, err := GeneratePushManifest(specs)
 	if err != nil {
-		return err
+		return fmt.Errorf("generate push manifest: %w", err)
 	}
 
 	manifestPath := filepath.Join(outputDir, PushManifestFileName())

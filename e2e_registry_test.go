@@ -22,6 +22,7 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/getter"
+	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/repo"
 )
 
@@ -29,10 +30,13 @@ const (
 	e2eRegistryHost           = "localhost:5000"
 	e2eSmallChartsRepoURL     = "https://prometheus-community.github.io/helm-charts"
 	e2eLargeChartsRepoURL     = "https://prometheus-community.github.io/helm-charts"
+	e2eBitnamiNginxOCIRepo    = "oci://registry-1.docker.io/bitnamicharts/nginx"
+	e2eBitnamiNginxOCIVersion = "25.0.10"
 	e2eSmallChartName         = "prometheus-node-exporter"
 	e2eLargeRemoteChartName   = "prometheus"
 	e2eSmallChartMinImages    = 1
 	e2eLargeRemoteMinImageSet = 5
+	e2eOCIRepoPath            = "charts"
 )
 
 func TestRegistryE2E(t *testing.T) {
@@ -91,33 +95,109 @@ func TestRegistryE2E(t *testing.T) {
 	}
 }
 
+func TestOCIRegistryE2E(t *testing.T) {
+	if os.Getenv("E2E_REGISTRY_TEST") == "" {
+		t.Skip("set E2E_REGISTRY_TEST=1 to run the registry e2e test")
+	}
+	if testing.Short() {
+		t.Skip("skipping registry e2e test in short mode")
+	}
+
+	containerID, err := ensureRegistry(t)
+	if err != nil {
+		t.Fatalf("ensure registry: %v", err)
+	}
+	if containerID != "" {
+		t.Cleanup(func() {
+			stopRegistryContainer(t, containerID)
+		})
+	}
+
+	cliBinary := buildCLIBinary(t)
+	ociRepoURL, chartName, chartVersion := pushChartToOCIRegistry(
+		t, e2eRegistryHost, e2eOCIRepoPath, e2eSmallChartName, e2eSmallChartsRepoURL,
+	)
+
+	testCases := []struct {
+		name     string
+		chartArg string
+		repoArg  string
+	}{
+		{
+			name:     "chart argument is full oci reference",
+			chartArg: fmt.Sprintf("%s/%s", ociRepoURL, chartName),
+		},
+		{
+			name:     "repo and chart split oci reference",
+			chartArg: chartName,
+			repoArg:  ociRepoURL,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			outputDir := t.TempDir()
+			pullArgs := []string{"pull", tc.chartArg, "--version", chartVersion, "--output-dir", outputDir}
+			if tc.repoArg != "" {
+				pullArgs = append(pullArgs, "--repo", tc.repoArg)
+			}
+
+			runPullCommand(t, cliBinary, pullArgs, "")
+			manifest := checkE2EArtifacts(t, outputDir, e2eSmallChartMinImages)
+
+			pushBinary := filepath.Join(outputDir, push.PushBinaryName())
+			pushCmd := exec.Command(pushBinary, "push", e2eRegistryHost)
+			pushCmd.Env = os.Environ()
+			pushOutput, err := pushCmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("push helper failed: %v\n%s", err, string(pushOutput))
+			}
+
+			verifyRegistryImages(t, e2eRegistryHost, manifest)
+		})
+	}
+}
+
+func TestPublicOCIRegistryE2E(t *testing.T) {
+	if os.Getenv("E2E_REGISTRY_TEST") == "" {
+		t.Skip("set E2E_REGISTRY_TEST=1 to run the registry e2e test")
+	}
+	if testing.Short() {
+		t.Skip("skipping registry e2e test in short mode")
+	}
+
+	cliBinary := buildCLIBinary(t)
+	outputDir := t.TempDir()
+	runPullCommand(t, cliBinary, []string{
+		"pull",
+		e2eBitnamiNginxOCIRepo,
+		"--version", e2eBitnamiNginxOCIVersion,
+		"--output-dir", outputDir,
+	}, "")
+	checkE2EArtifacts(t, outputDir, e2eSmallChartMinImages)
+}
+
 func runRegistryE2ECase(t *testing.T, cliBinary, chart, repoURL, chartVersion, workingDir string, minImages int) {
 	t.Helper()
 
 	outputDir := t.TempDir()
 	t.Log("rendering chart and archiving images")
-	pullArgs := []string{"pull", "--chart", chart, "--output-dir", outputDir}
+	pullArgs := []string{"pull", chart, "--output-dir", outputDir}
 	if repoURL != "" {
 		pullArgs = append(pullArgs, "--repo", repoURL)
 	}
 	if chartVersion != "" {
 		pullArgs = append(pullArgs, "--version", chartVersion)
 	}
-	pullCmd := exec.Command(cliBinary, pullArgs...)
-	if workingDir != "" {
-		pullCmd.Dir = workingDir
-	}
-	pullOutput, err := pullCmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("pull command failed: %v\nargs: %v\n%s", err, pullArgs, string(pullOutput))
-	}
+	runPullCommand(t, cliBinary, pullArgs, workingDir)
 
 	t.Log("checking artifacts")
 	manifest := checkE2EArtifacts(t, outputDir, minImages)
 
 	pushBinary := filepath.Join(outputDir, push.PushBinaryName())
 	t.Log("pushing mirrored images")
-	cmd := exec.Command(pushBinary, "push", "--registry", e2eRegistryHost)
+	cmd := exec.Command(pushBinary, "push", e2eRegistryHost)
 	cmd.Env = os.Environ()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -126,6 +206,19 @@ func runRegistryE2ECase(t *testing.T, cliBinary, chart, repoURL, chartVersion, w
 
 	t.Log("verifying registry images")
 	verifyRegistryImages(t, e2eRegistryHost, manifest)
+}
+
+func runPullCommand(t *testing.T, cliBinary string, args []string, workingDir string) {
+	t.Helper()
+
+	pullCmd := exec.Command(cliBinary, args...)
+	if workingDir != "" {
+		pullCmd.Dir = workingDir
+	}
+	pullOutput, err := pullCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pull command failed: %v\nargs: %v\n%s", err, args, string(pullOutput))
+	}
 }
 
 func preparePopularLocalChart(t *testing.T, chartName, repoURL string) (string, string, string) {
@@ -216,6 +309,49 @@ func downloadChartArchive(t *testing.T, chartURL string) []byte {
 		t.Fatalf("read chart archive response: %v", err)
 	}
 	return data
+}
+
+func pushChartToOCIRegistry(
+	t *testing.T,
+	registryHost, repoPath, chartName, sourceRepoURL string,
+) (ociRepoURL, pushedChartName, pushedChartVersion string) {
+	t.Helper()
+
+	chartVersion := resolveStableChartVersion(t, sourceRepoURL, chartName)
+	chartURL, err := repo.FindChartInRepoURL(sourceRepoURL, chartName, chartVersion, "", "", "", getter.All(cli.New()))
+	if err != nil {
+		t.Fatalf("find chart URL for %s/%s:%s: %v", sourceRepoURL, chartName, chartVersion, err)
+	}
+	archive := downloadChartArchive(t, chartURL)
+	loadedChart, err := loader.LoadArchive(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("load chart archive %s: %v", chartURL, err)
+	}
+
+	pkgDir := t.TempDir()
+	archivePath, err := chartutil.Save(loadedChart, pkgDir)
+	if err != nil {
+		t.Fatalf("chartutil.Save() error: %v", err)
+	}
+	chartData, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read packaged chart archive: %v", err)
+	}
+
+	client, err := registry.NewClient(
+		registry.ClientOptEnableCache(true),
+		registry.ClientOptPlainHTTP(),
+	)
+	if err != nil {
+		t.Fatalf("registry.NewClient() error: %v", err)
+	}
+
+	ref := fmt.Sprintf("%s/%s/%s:%s", registryHost, repoPath, loadedChart.Metadata.Name, loadedChart.Metadata.Version)
+	if _, err := client.Push(chartData, ref); err != nil {
+		t.Fatalf("push chart to OCI registry %q: %v", ref, err)
+	}
+
+	return fmt.Sprintf("oci://%s/%s", registryHost, repoPath), loadedChart.Metadata.Name, loadedChart.Metadata.Version
 }
 
 func ensureRegistry(t *testing.T) (string, error) {

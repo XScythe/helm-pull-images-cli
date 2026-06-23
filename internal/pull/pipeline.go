@@ -11,7 +11,10 @@ import (
 
 func (r Runner) Run(ctx context.Context, opts Options, status ...io.Writer) error {
 	_, err := r.Execute(ctx, opts, status...)
-	return err
+	if err != nil {
+		return fmt.Errorf("execute pull: %w", err)
+	}
+	return nil
 }
 
 func statusWriter(status ...io.Writer) io.Writer {
@@ -38,7 +41,7 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 	if outputDir == "" {
 		dir, err := defaultOutputDir(opts.Chart)
 		if err != nil {
-			return PullResult{}, err
+			return PullResult{}, fmt.Errorf("default output dir: %w", err)
 		}
 		outputDir = dir
 	} else if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -47,25 +50,25 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 
 	loaded, err := r.loadChart(runCtx, opts)
 	if err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("load chart: %w", err)
 	}
 	fmt.Fprintf(statusOut, "chart: name=%s version=%s source=%s\n", loaded.Info.Name, loaded.Info.Version, loaded.Info.Source)
 
 	chartImages, err := r.extractChartImages(runCtx, opts)
 	if err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("extract chart images: %w", err)
 	}
 
 	manifest, err := r.renderManifest(r, runCtx, opts)
 	if err != nil {
 		cancel()
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("render manifest: %w", err)
 	}
 
 	images, err := r.extractImages(manifest)
 	if err != nil {
 		cancel()
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("extract images: %w", err)
 	}
 	allImages := appendUnique(chartImages, images...)
 
@@ -80,11 +83,11 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 	}
 
 	if err := r.writePushManifest(outputDir, specs); err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("write push manifest: %w", err)
 	}
 
 	if _, err := r.copySelfExecutable(outputDir); err != nil {
-		return PullResult{}, err
+		return PullResult{}, fmt.Errorf("copy self executable: %w", err)
 	}
 
 	result = PullResult{

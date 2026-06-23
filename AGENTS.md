@@ -12,9 +12,11 @@ the two lifecycle phases the tool supports: **pull** (render + stage) and **push
 (transfer to a registry).
 
 **Thin Command Layer** (`cmd/`)
-- Parse flags → validate (`PreRunE`) → delegate to an internal package.
-- `cmd/pull.go` builds `pull.Options` and calls `pull.Run(...)`.
-- `cmd/push.go` calls `push.PushImages(...)`.
+- Parse flags/args → validate (`PreRunE`) → delegate to an internal package.
+- `cmd/pull.go` — `pull CHART [flags]`: Takes chart as positional argument; builds `pull.Options`
+  and calls `pull.Run()`.
+- `cmd/push.go` — `push REGISTRY [flags]`: Takes registry as positional argument; calls
+  `push.PushImages()` with the registry from `args[0]`.
 - `cmd/root.go` wires subcommands and exposes `commandLogger(verbose bool) *slog.Logger`,
   a small helper that returns a stderr `slog` logger at Debug level when `--verbose`
   is set, otherwise Info. There is no central Config/DI struct.
@@ -55,7 +57,8 @@ Package dependency direction (no cycles): `pull` → `push`, `pushspec`;
   - Chart names: `chartutil.ValidateMetadataName()` from the Helm SDK
   - Release names: `chartutil.ValidateReleaseName()` from the Helm SDK
   - Namespaces: `validation.IsDNS1123Subdomain()` from Kubernetes apimachinery
-  - URLs: Go's standard `url.Parse()`
+  - URLs: Go's standard `url.Parse()` (`ValidateURL` additionally restricts the scheme
+    to `http`/`https`, matching the `index.yaml`-based repo loading the tool supports).
 - Separation of concerns: Cobra handles "is it provided", validators handle "is it valid".
 
 ### Logging
@@ -73,9 +76,10 @@ Package dependency direction (no cycles): `pull` → `push`, `pushspec`;
 ## Working Rules
 
 **Commands**
-- Use `MarkFlagRequired()` for required flags (Cobra handles presence validation).
+- Required arguments use Cobra's `Args: cobra.ExactArgs(N)` and are mapped in `PreRunE`.
+- Optional flags use `MarkFlagRequired()` when required (Cobra handles presence validation).
 - Use `PreRunE()` for format/constraint validation via `internal/validation/`.
-- Keep commands thin: validate → delegate. No workflow logic in commands.
+- Keep commands thin: parse/validate → delegate. No workflow logic in commands.
 
 **Internal Packages**
 - Keep the cmd/internal split and the pull/push/pushspec boundaries intact.
@@ -97,20 +101,30 @@ Package dependency direction (no cycles): `pull` → `push`, `pushspec`;
 ## cmd/ Testing
 
 Helpers live in `cmd/shared_test.go`:
-- `ExecuteCommand(cmd, args)` → run a command, capture output.
+- `ExecuteCommand(cmd, args)` → run a command through `rootCmd`, capture stdout/stderr/err.
 - `AssertFlagExists` / `AssertFlagNotExists` / `AssertFlagType` / `AssertFlagDefault`
-  / `AssertFlagRequired` → verify flag registration and properties.
-- `PatchCobraRunE(cmd, mockFunc)` → mock execution with automatic state reset.
+  → verify flag registration and properties.
+- `spyPullRun(retErr)` / `spyPushRun(retErr)` → swap the `pullRun`/`pushRun` seam for a
+  spy that records the mapped `pull.Options` (or `registry/inputDir/concurrency`) and
+  returns `retErr`. Each installer resets the command's global flag vars (`resetCmdVars`)
+  and returns a `restore` func; always `defer restore()`.
+- `combinedErrorText(output)` → lowercased stderr+stdout+err, used to assert an error is
+  attributable to the right flag/validator.
 
-Coverage spans `cmd/pull_test.go`, `cmd/push_test.go`, and `cmd/root_test.go`:
-flag registration, types, defaults, required status, validation rules, and
-execution with valid inputs.
+Test intent by layer:
+- **Arg/flag metadata** (registration, type, default, required status) via the `Assert*` helpers.
+- **Arg/flag→workflow mapping**: drive real `RunE` and assert the args/flags were parsed and
+  passed correctly to the internal layer.
+- **Validation wiring**: invalid inputs assert an error *attributable to the correct
+  arg/flag* (substring check), not the exact wording. Exact message wording is owned by
+  `internal/validation/validation_test.go`.
+
+Note: pflag retains flag values across `Execute` calls on the shared `rootCmd`. Tests
+that mutate flags must reset state via `resetCmdVars()`.
 
 ```go
-restore := PatchCobraRunE(pullCmd, func(cmd *cobra.Command, args []string) error {
-    return nil // mock backend
-})
-defer restore()
+output := ExecuteCommand(pullCmd, []string{"nginx", "--concurrency", "8"})
+output := ExecuteCommand(pushCmd, []string{"docker.io", "--concurrency", "4"})
 ```
 
 ## Commands
@@ -119,13 +133,14 @@ defer restore()
 - `go build ./...` — Build
 - `go vet ./...` — Vet
 - `go run . --help` — Help
-- `go run . pull --chart nginx --verbose` — Pull with verbose logging
+- `go run . pull nginx --verbose` — Pull with verbose logging
 - `go test ./... -run TestName` — Run a focused test
 
 ## Notes
 
 - `pull` loads charts in-process via the Helm SDK, resolves remote versions from
-  `index.yaml` when needed, and writes archives plus `push_images.json` into the
+  `index.yaml` for HTTP(S) repos, supports OCI chart references (`oci://...`) via
+  the Helm registry client, and writes archives plus `push_images.json` into the
   output directory.
 - `push` reads `push_images.json` from `--input-dir` (or the helper binary directory
   by default), then pushes images with bounded concurrency.

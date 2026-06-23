@@ -32,12 +32,12 @@ var resolveExecutablePath = os.Executable
 func PushImages(ctx context.Context, registry, inputDir string, concurrency int, status ...io.Writer) error {
 	resolvedInputDir, err := resolvePushInputDir(inputDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve push input dir: %w", err)
 	}
 
 	manifest, err := pushspec.ReadPushManifest(resolvedInputDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("read push manifest: %w", err)
 	}
 	progress := newTransferProgress(statusWriter(status...), "pushing", len(manifest.Images))
 	defer progress.Finish()
@@ -66,7 +66,7 @@ func PushImages(ctx context.Context, registry, inputDir string, concurrency int,
 		})
 	}
 	if err := group.Wait(); err != nil {
-		return err
+		return fmt.Errorf("push images: %w", err)
 	}
 
 	return nil

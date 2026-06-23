@@ -99,7 +99,7 @@ func TestRootCmd_PushSubcommand(t *testing.T) {
 		t.Fatalf("push subcommand --help failed: %v", output.Err)
 	}
 	helpOutput := output.Stdout + output.Stderr
-	if !strings.Contains(helpOutput, "registry") {
-		t.Fatalf("push help missing 'registry' flag: %s", helpOutput)
+	if !strings.Contains(helpOutput, "REGISTRY") {
+		t.Fatalf("push help missing 'REGISTRY' argument: %s", helpOutput)
 	}
 }

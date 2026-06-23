@@ -14,12 +14,16 @@ var (
 	pushVerbose     bool
 )
 
+var pushRun = push.PushImages
+
 var pushCmd = &cobra.Command{
-	Use:   "push",
+	Use:   "push REGISTRY",
 	Short: "Push mirrored images from generated OCI layout artifacts",
+	Args:  cobra.ExactArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
+		pushRegistry = args[0]
 		// Validate all flags
-		if err := validation.ValidateImageRegistry("--registry", pushRegistry); err != nil {
+		if err := validation.ValidateImageRegistry("registry argument", pushRegistry); err != nil {
 			return err
 		}
 		if err := validation.ValidateConcurrency("--concurrency", pushConcurrency); err != nil {
@@ -33,14 +37,12 @@ var pushCmd = &cobra.Command{
 			"concurrency", pushConcurrency,
 		)
 
-		return push.PushImages(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency, cmd.ErrOrStderr())
+		return pushRun(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency, cmd.ErrOrStderr())
 	},
 }
 
 func init() {
-	pushCmd.Flags().StringVar(&pushRegistry, "registry", "", "Target registry host")
 	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and OCI layout artifacts")
 	pushCmd.Flags().IntVar(&pushConcurrency, "concurrency", 4, "Number of images to push concurrently")
 	pushCmd.Flags().BoolVar(&pushVerbose, "verbose", false, "Enable verbose logging")
-	pushCmd.MarkFlagRequired("registry")
 }

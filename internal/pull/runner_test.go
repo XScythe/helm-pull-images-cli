@@ -87,6 +87,13 @@ func TestDefaultOutputDirAppendsTimestampWhenDirectoryExists(t *testing.T) {
 	}
 }
 
+func TestSanitizeNameWithOCIChartReference(t *testing.T) {
+	got := sanitizeName("oci://localhost:5000/charts/prometheus-node-exporter")
+	if got != "prometheus-node-exporter" {
+		t.Fatalf("sanitizeName() = %q, want %q", got, "prometheus-node-exporter")
+	}
+}
+
 func matchesPattern(s, pattern string) bool {
 	re, err := regexp.Compile(pattern)
 	if err != nil {

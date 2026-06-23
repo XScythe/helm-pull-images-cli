@@ -34,6 +34,15 @@ func (r Runner) loadChart(ctx context.Context, opts Options) (loadedChart, error
 		return *cached, nil
 	}
 
+	if isOCIRef(opts.Chart) || isOCIRef(opts.Repo) {
+		chrt, err := r.ociChartSource(ctx, opts)
+		if err != nil {
+			return loadedChart{}, err
+		}
+		r.setCachedChart(opts, chrt)
+		return chrt, nil
+	}
+
 	if opts.Repo == "" {
 		chrt, localErr := r.localChartSource(ctx, opts)
 		if localErr == nil {

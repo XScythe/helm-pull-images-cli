@@ -32,7 +32,7 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 
 	specs, err := pushspec.BuildSpecs(images)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build archive specs: %w", err)
 	}
 	progress := newTransferProgress(statusWriter(status...), "pulling", len(specs))
 	defer progress.Finish()
@@ -40,7 +40,7 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 	layoutRoot := filepath.Join(outputDir, pushspec.OCILayoutDirName())
 	layoutPath, createdLayout, err := openOrCreateLayout(layoutRoot)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open or create oci layout: %w", err)
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -66,7 +66,7 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 		if createdLayout {
 			_ = os.RemoveAll(layoutRoot)
 		}
-		return nil, err
+		return nil, fmt.Errorf("archive images: %w", err)
 	}
 
 	return specs, nil

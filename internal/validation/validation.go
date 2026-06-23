@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/url"
 	"runtime"
+	"strings"
 
 	"helm.sh/helm/v3/pkg/chartutil"
 )
@@ -47,6 +48,9 @@ func ValidateURL(name, value string) error {
 	if u.Scheme == "" {
 		return fmt.Errorf("%s must be a valid URL with scheme (http/https): %q", name, value)
 	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https scheme: %q", name, value)
+	}
 	return nil
 }
 
@@ -55,6 +59,35 @@ func ValidateURL(name, value string) error {
 func ValidateChartName(name, value string) error {
 	if err := chartutil.ValidateMetadataName(value); err != nil {
 		return fmt.Errorf("%s %w", name, err)
+	}
+	return nil
+}
+
+// ValidateOCIRef checks that a string is a basic valid OCI chart reference.
+// Supported forms:
+//   - oci://registry.example.com/charts/mychart
+//   - oci://localhost:5000/charts/mychart:1.2.3
+func ValidateOCIRef(name, value string) error {
+	if !strings.HasPrefix(strings.ToLower(value), "oci://") {
+		return fmt.Errorf("%s must start with oci://: %q", name, value)
+	}
+
+	ref := value[len("oci://"):]
+	if strings.ContainsAny(ref, " \t\r\n") {
+		return fmt.Errorf("%s must not contain whitespace: %q", name, value)
+	}
+	if ref == "" {
+		return fmt.Errorf("%s must include registry host and chart path: %q", name, value)
+	}
+
+	parts := strings.Split(ref, "/")
+	if len(parts) < 2 || parts[0] == "" {
+		return fmt.Errorf("%s must include registry host and chart path: %q", name, value)
+	}
+	for _, part := range parts[1:] {
+		if part == "" {
+			return fmt.Errorf("%s must include non-empty chart path segments: %q", name, value)
+		}
 	}
 	return nil
 }
