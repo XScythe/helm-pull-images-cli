@@ -7,7 +7,7 @@ package push
 import (
 	"context"
 	"fmt"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
 	"path/filepath"

@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"helm-pull-images-cli/internal/pull"
-	"helm-pull-images-cli/internal/validation"
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"helm-deep-pack/internal/pull"
+	"helm-deep-pack/internal/validation"
 )
 
 var (

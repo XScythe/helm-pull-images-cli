@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	pullpkg "helm-pull-images-cli/internal/pull"
+	pullpkg "helm-deep-pack/internal/pull"
 
 	"github.com/spf13/cobra"
 )
@@ -26,11 +26,11 @@ func ExecuteCommand(cmd *cobra.Command, args []string) *CapturedOutput {
 
 	execCmd := cmd
 	targetCmd := cmd.Name()
-	if cmd.Name() != "helm-pull-images-cli" && cmd.Name() != "" {
+	if cmd.Name() != "helm-deep-pack" && cmd.Name() != "" {
 		execCmd = rootCmd
 		args = append([]string{cmd.Name()}, args...)
 	}
-	if targetCmd == "helm-pull-images-cli" && len(args) > 0 {
+	if targetCmd == "helm-deep-pack" && len(args) > 0 {
 		targetCmd = args[0]
 	}
 	if targetCmd == "pull" || targetCmd == "push" {

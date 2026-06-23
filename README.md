@@ -1,4 +1,4 @@
-# helm-pull-images-cli
+# helm-deep-pack
 
 CLI tool to render Helm charts, extract referenced container images, stage them as OCI layout artifacts, and push them to a target registry.
 

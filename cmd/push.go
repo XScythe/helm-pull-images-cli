@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"helm-pull-images-cli/internal/push"
-	"helm-pull-images-cli/internal/validation"
-
 	"github.com/spf13/cobra"
+
+	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/validation"
 )
 
 var (

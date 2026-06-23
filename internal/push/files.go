@@ -30,11 +30,7 @@ func CopySelfExecutable(outputDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open executable: %w", err)
 	}
-	defer func() {
-		if err := in.Close(); err != nil {
-			// Log close error but don't fail the operation
-		}
-	}()
+	defer func() { _ = in.Close() }()
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)

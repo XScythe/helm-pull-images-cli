@@ -92,6 +92,9 @@ func loadOCIChart(_ context.Context, opts Options) (loadedChart, error) {
 	if err != nil {
 		return loadedChart{}, fmt.Errorf("pull OCI chart %q: %w", ociScheme+ref, err)
 	}
+	if len(result.Chart.Data) > maxChartArchiveBytes {
+		return loadedChart{}, fmt.Errorf("chart archive exceeds size limit (%d bytes)", maxChartArchiveBytes)
+	}
 
 	chrt, err := loader.LoadArchive(bytes.NewReader(result.Chart.Data))
 	if err != nil {
@@ -99,7 +102,9 @@ func loadOCIChart(_ context.Context, opts Options) (loadedChart, error) {
 	}
 
 	return loadedChart{
-		Chart: chrt,
+		Chart:       chrt,
+		ArchiveData: append([]byte(nil), result.Chart.Data...),
+		ArchiveName: defaultChartArchiveName(chrt),
 		Info: ChartInfo{
 			Name:    chrt.Metadata.Name,
 			Version: chrt.Metadata.Version,

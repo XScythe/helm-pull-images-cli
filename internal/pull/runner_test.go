@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"helm-pull-images-cli/internal/push"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/pushspec"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,8 +23,9 @@ func testLoadedChart(name, version, source string) loadedChart {
 	return loadedChart{
 		Chart: &helmchart.Chart{
 			Metadata: &helmchart.Metadata{
-				Name:    name,
-				Version: version,
+				APIVersion: "v2",
+				Name:       name,
+				Version:    version,
 			},
 		},
 		Info: ChartInfo{
@@ -185,6 +186,10 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		manifestPath := filepath.Join(outputDir, pushspec.PushManifestFileName())
 		return os.WriteFile(manifestPath, []byte("{\n  \"images\": []\n}\n"), 0o644)
 	}
+	h.runner.stageChartArchive = func(_ loadedChart, outputDir string) (string, error) {
+		calls = append(calls, "chart-archive")
+		return filepath.Join(outputDir, "demo-1.0.0.tgz"), nil
+	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
 		calls = append(calls, "copy")
 		if outputDir == "" {
@@ -206,7 +211,7 @@ func TestRunnerRunOrchestratesDependencies(t *testing.T) {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
 
-	if got, want := calls, []string{"render:" + chartDir, "extract", "archive", "manifest", "copy"}; !reflect.DeepEqual(got, want) {
+	if got, want := calls, []string{"render:" + chartDir, "extract", "archive", "manifest", "chart-archive", "copy"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Runner.Run() calls = %v, want %v", got, want)
 	}
 
@@ -339,6 +344,10 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 		calls = append(calls, "manifest")
 		return os.WriteFile(filepath.Join(outputDir, pushspec.PushManifestFileName()), []byte("{}\n"), 0o644)
 	}
+	h.runner.stageChartArchive = func(_ loadedChart, outputDir string) (string, error) {
+		calls = append(calls, "chart-archive")
+		return filepath.Join(outputDir, "example-0.1.0.tgz"), nil
+	}
 	h.runner.copySelfExecutable = func(outputDir string) (string, error) {
 		calls = append(calls, "copy")
 		return filepath.Join(outputDir, push.PushBinaryName()), nil
@@ -352,7 +361,7 @@ func TestRunnerRunChecksChartAnnotationsBeforeRendering(t *testing.T) {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
 
-	want := []string{"chart", "render", "extract", "archive", "manifest", "copy"}
+	want := []string{"chart", "render", "extract", "archive", "manifest", "chart-archive", "copy"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("Runner.Run() calls = %v, want %v", calls, want)
 	}
@@ -635,7 +644,7 @@ func TestLoadHelmRepoChartMissingChartListsAvailableCharts(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `apiVersion: v1
+		_, _ = fmt.Fprint(w, `apiVersion: v1
 entries:
   nginx:
     - version: 1.2.3
@@ -668,7 +677,7 @@ func TestLoadHelmRepoChartVersionMismatchListsAvailableVersions(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `apiVersion: v1
+		_, _ = fmt.Fprint(w, `apiVersion: v1
 entries:
   nginx:
     - version: 2.3.0
@@ -711,7 +720,7 @@ func TestLoadHelmRepoChartRejectsNonHelmWebsite(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `<!doctype html><html lang="en"><body><h1>Example Domain</h1></body></html>`)
+		_, _ = fmt.Fprint(w, `<!doctype html><html lang="en"><body><h1>Example Domain</h1></body></html>`)
 	}))
 	t.Cleanup(server.Close)
 
@@ -725,6 +734,40 @@ func TestLoadHelmRepoChartRejectsNonHelmWebsite(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "does not look like a Helm repository") {
 		t.Fatalf("error should reject non-helm websites, got: %s", err)
+	}
+}
+
+func TestLoadHelmRepoChartRejectsOversizedArchive(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index.yaml":
+			_, _ = fmt.Fprintf(w, `apiVersion: v1
+entries:
+  nginx:
+    - version: 1.2.3
+      name: nginx
+      urls:
+        - %s/charts/nginx-1.2.3.tgz
+`, server.URL)
+		case "/charts/nginx-1.2.3.tgz":
+			_, _ = w.Write(bytes.Repeat([]byte("x"), maxChartArchiveBytes+1))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := loadHelmRepoChart(context.Background(), Options{
+		Chart:   "nginx",
+		Repo:    server.URL,
+		Version: "1.2.3",
+	})
+	if err == nil {
+		t.Fatal("loadHelmRepoChart() error = nil, want oversized archive error")
+	}
+	if !strings.Contains(err.Error(), "chart archive exceeds size limit") {
+		t.Fatalf("error should report oversized archive, got: %s", err)
 	}
 }
 
@@ -784,7 +827,7 @@ func TestLoadChartVersionMismatchUsesConfiguredRepoDetails(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		fmt.Fprint(w, `apiVersion: v1
+		_, _ = fmt.Fprint(w, `apiVersion: v1
 entries:
   openebs:
     - version: 3.11.0

@@ -19,10 +19,9 @@ package validation
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strings"
-
-	"helm.sh/helm/v3/pkg/chartutil"
 )
 
 // maxConcurrency derives sensible max concurrency from system specs.
@@ -55,10 +54,19 @@ func ValidateURL(name, value string) error {
 }
 
 // ValidateChartName checks that a string is a valid Helm chart name.
-// Delegates to Helm's own validator for metadata names (includes chart names).
+// Mirrors Helm's metadata-name validation without relying on the deprecated SDK helper.
 func ValidateChartName(name, value string) error {
-	if err := chartutil.ValidateMetadataName(value); err != nil {
+	if err := validateMetadataName(value); err != nil {
 		return fmt.Errorf("%s %w", name, err)
+	}
+	return nil
+}
+
+var metadataNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
+func validateMetadataName(name string) error {
+	if name == "" || len(name) > 253 || !metadataNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid metadata name, must match regex %s and the length must not be longer than 253", metadataNamePattern.String())
 	}
 	return nil
 }

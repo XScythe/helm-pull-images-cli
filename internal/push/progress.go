@@ -92,7 +92,7 @@ func (p *transferProgress) Finish() {
 	defer p.mu.Unlock()
 
 	if p.lastLines > 0 {
-		fmt.Fprintln(p.w)
+		_, _ = fmt.Fprintln(p.w)
 	}
 	p.lastLen = 0
 	p.lastLines = 0
@@ -104,7 +104,7 @@ func (p *transferProgress) renderLocked(item string, finished bool) {
 	}
 	if !p.terminal {
 		if !finished {
-			fmt.Fprintf(p.w, "%s %d/%d: %s\n", p.label, p.completed+len(p.active), p.total, normalizeDisplayImage(item))
+			_, _ = fmt.Fprintf(p.w, "%s %d/%d: %s\n", p.label, p.completed+len(p.active), p.total, normalizeDisplayImage(item))
 		}
 		return
 	}
@@ -120,9 +120,9 @@ func (p *transferProgress) renderLocked(item string, finished bool) {
 	}
 	for i, line := range lines {
 		if i > 0 {
-			fmt.Fprint(p.w, "\n")
+			_, _ = fmt.Fprint(p.w, "\n")
 		}
-		fmt.Fprint(p.w, line)
+		_, _ = fmt.Fprint(p.w, line)
 	}
 	p.lastLines = len(lines)
 	if len(lines) > 0 {
@@ -209,8 +209,8 @@ func clearProgressBlock(w io.Writer, lines int) {
 	if lines <= 0 {
 		return
 	}
-	fmt.Fprint(w, "\r\x1b[2K")
+	_, _ = fmt.Fprint(w, "\r\x1b[2K")
 	for i := 1; i < lines; i++ {
-		fmt.Fprint(w, "\x1b[1A\r\x1b[2K")
+		_, _ = fmt.Fprint(w, "\x1b[1A\r\x1b[2K")
 	}
 }

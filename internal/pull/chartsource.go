@@ -1,6 +1,7 @@
 package pull
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,8 +15,10 @@ import (
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/repo"
 
-	"helm-pull-images-cli/internal/chartimages"
+	"helm-deep-pack/internal/chartimages"
 )
+
+const maxChartArchiveBytes = 16 << 20 // 16 MiB
 
 func (r Runner) extractChartAnnotationImages(ctx context.Context, opts Options) ([]string, error) {
 	if opts.Chart == "" {
@@ -57,17 +60,14 @@ func (r Runner) loadChart(ctx context.Context, opts Options) (loadedChart, error
 			return chrt, nil
 		}
 
-		var lookupErr *repoLookupError
-		if errors.As(fallbackErr, &lookupErr) {
+		if _, ok := errors.AsType[*repoLookupError](fallbackErr); ok {
 			return loadedChart{}, fallbackErr
 		}
-		if localErr != nil || fallbackErr != nil {
-			return loadedChart{}, fmt.Errorf(
-				"chart %q not found locally; download/pull the chart first or add its repository to Helm",
-				opts.Chart,
-			)
-		}
-		return loadedChart{}, fmt.Errorf("chart %q not found locally", opts.Chart)
+
+		return loadedChart{}, fmt.Errorf(
+			"chart %q not found. download/pull the chart first or add its repository to Helm",
+			opts.Chart,
+		)
 	}
 	chrt, err := r.helmChartSource(ctx, opts)
 	if err != nil {
@@ -110,8 +110,13 @@ func localChartSource(_ context.Context, opts Options) (loadedChart, error) {
 	if err != nil {
 		return loadedChart{}, err
 	}
+	localArchivePath := ""
+	if info, statErr := os.Stat(opts.Chart); statErr == nil && !info.IsDir() && isChartArchivePath(opts.Chart) {
+		localArchivePath = opts.Chart
+	}
 	return loadedChart{
-		Chart: chrt,
+		Chart:            chrt,
+		LocalArchivePath: localArchivePath,
 		Info: ChartInfo{
 			Name:    chrt.Metadata.Name,
 			Version: chrt.Metadata.Version,
@@ -175,18 +180,37 @@ func loadHelmRepoChart(ctx context.Context, opts Options) (loadedChart, error) {
 		return loadedChart{}, fmt.Errorf("fetch chart archive: %s: %s", resp.Status, string(body))
 	}
 
-	chrt, err := loader.LoadArchive(resp.Body)
+	archiveData, err := readChartArchiveData(resp.Body)
+	if err != nil {
+		return loadedChart{}, err
+	}
+
+	chrt, err := loader.LoadArchive(bytes.NewReader(archiveData))
 	if err != nil {
 		return loadedChart{}, err
 	}
 	return loadedChart{
-		Chart: chrt,
+		Chart:       chrt,
+		ArchiveData: archiveData,
+		ArchiveName: chartArchiveNameFromURL(chartURL),
 		Info: ChartInfo{
 			Name:    chrt.Metadata.Name,
 			Version: chrt.Metadata.Version,
 			Source:  opts.Repo,
 		},
 	}, nil
+}
+
+func readChartArchiveData(r io.Reader) ([]byte, error) {
+	limited := io.LimitReader(r, maxChartArchiveBytes+1)
+	archiveData, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("read chart archive response: %w", err)
+	}
+	if int64(len(archiveData)) > maxChartArchiveBytes {
+		return nil, fmt.Errorf("chart archive exceeds size limit (%d bytes)", maxChartArchiveBytes)
+	}
+	return archiveData, nil
 }
 
 func (r Runner) loadChartFromConfiguredRepos(ctx context.Context, opts Options) (loadedChart, error) {

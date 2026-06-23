@@ -44,7 +44,7 @@ func TestRootCmd_InvalidSubcommand(t *testing.T) {
 	if output.Err == nil {
 		t.Fatalf("expected error for invalid subcommand, got none")
 	}
-	if !strings.Contains(output.Stderr, "Run 'helm-pull-images-cli --help' for usage.") {
+	if !strings.Contains(output.Stderr, "Run 'helm-deep-pack --help' for usage.") {
 		t.Fatalf("expected usage hint for invalid subcommand, got: %s", output.Stderr)
 	}
 }
@@ -73,7 +73,7 @@ func TestRootCmd_SilencesUsageForCommandErrors(t *testing.T) {
 	if output.Err == nil {
 		t.Fatalf("expected error for temp command, got none")
 	}
-	if strings.Contains(output.Stderr, "Usage:") || strings.Contains(output.Stderr, "Run 'helm-pull-images-cli --help' for usage.") {
+	if strings.Contains(output.Stderr, "Usage:") || strings.Contains(output.Stderr, "Run 'helm-deep-pack --help' for usage.") {
 		t.Fatalf("expected no usage output for command error, got: %s", output.Stderr)
 	}
 }

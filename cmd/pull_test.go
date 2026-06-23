@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	pullpkg "helm-pull-images-cli/internal/pull"
+	pullpkg "helm-deep-pack/internal/pull"
 )
 
 func TestMain(m *testing.M) {

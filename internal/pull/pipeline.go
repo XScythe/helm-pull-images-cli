@@ -3,7 +3,7 @@ package pull
 import (
 	"context"
 	"fmt"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
 	"path/filepath"
@@ -52,7 +52,7 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 	if err != nil {
 		return PullResult{}, fmt.Errorf("load chart: %w", err)
 	}
-	fmt.Fprintf(statusOut, "chart: name=%s version=%s source=%s\n", loaded.Info.Name, loaded.Info.Version, loaded.Info.Source)
+	_, _ = fmt.Fprintf(statusOut, "chart: name=%s version=%s source=%s\n", loaded.Info.Name, loaded.Info.Version, loaded.Info.Source)
 
 	chartImages, err := r.extractChartImages(runCtx, opts)
 	if err != nil {
@@ -84,6 +84,10 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 
 	if err := r.writePushManifest(outputDir, specs); err != nil {
 		return PullResult{}, fmt.Errorf("write push manifest: %w", err)
+	}
+
+	if _, err := r.stageChartArchive(loaded, outputDir); err != nil {
+		return PullResult{}, fmt.Errorf("stage chart archive: %w", err)
 	}
 
 	if _, err := r.copySelfExecutable(outputDir); err != nil {

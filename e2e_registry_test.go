@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"helm-pull-images-cli/internal/push"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/pushspec"
 	"io"
 	"net/http"
 	"os"
@@ -365,7 +365,7 @@ func ensureRegistry(t *testing.T) (string, error) {
 		t.Skip("no registry on :5000 and docker is unavailable")
 	}
 
-	containerName := fmt.Sprintf("helm-pull-images-e2e-%d", time.Now().UnixNano())
+	containerName := fmt.Sprintf("helm-deep-pack-e2e-%d", time.Now().UnixNano())
 	cmd := exec.Command("docker", "run", "-d", "--rm", "--name", containerName, "-p", "127.0.0.1:5000:5000", "registry:3")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -418,7 +418,7 @@ func waitForRegistry(t *testing.T) {
 func buildCLIBinary(t *testing.T) string {
 	t.Helper()
 
-	binary := filepath.Join(t.TempDir(), "helm-pull-images-cli")
+	binary := filepath.Join(t.TempDir(), "helm-deep-pack")
 	cmd := exec.Command("go", "build", "-o", binary, ".")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build CLI binary: %v: %s", err, string(output))

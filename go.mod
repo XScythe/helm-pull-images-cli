@@ -1,4 +1,4 @@
-module helm-pull-images-cli
+module helm-deep-pack
 
 go 1.26.3
 

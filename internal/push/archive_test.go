@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/pushspec"
 	"os"
 	"path/filepath"
 	"strings"

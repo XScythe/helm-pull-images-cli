@@ -20,9 +20,9 @@ import (
 
 	helmchart "helm.sh/helm/v3/pkg/chart"
 
-	"helm-pull-images-cli/internal/chartimages"
-	"helm-pull-images-cli/internal/push"
-	"helm-pull-images-cli/internal/pushspec"
+	"helm-deep-pack/internal/chartimages"
+	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/pushspec"
 )
 
 type Options struct {
@@ -48,8 +48,11 @@ type ChartInfo struct {
 }
 
 type loadedChart struct {
-	Chart *helmchart.Chart
-	Info  ChartInfo
+	Chart            *helmchart.Chart
+	Info             ChartInfo
+	LocalArchivePath string
+	ArchiveData      []byte
+	ArchiveName      string
 }
 
 type chartSourceAdapter func(ctx context.Context, opts Options) (loadedChart, error)
@@ -61,6 +64,7 @@ type Runner struct {
 	extractImages      func(manifest string) ([]string, error)
 	archiveImages      func(ctx context.Context, images []string, outputDir string, concurrency int, status ...io.Writer) ([]pushspec.ArchiveSpec, error)
 	writePushManifest  func(outputDir string, specs []pushspec.ArchiveSpec) error
+	stageChartArchive  func(loaded loadedChart, outputDir string) (string, error)
 	copySelfExecutable func(outputDir string) (string, error)
 	localChartSource   chartSourceAdapter
 	helmChartSource    chartSourceAdapter
@@ -86,6 +90,7 @@ func NewRunner() Runner {
 		extractImages:      chartimages.ExtractImages,
 		archiveImages:      push.ArchiveImages,
 		writePushManifest:  pushspec.WritePushManifest,
+		stageChartArchive:  stageChartArchive,
 		copySelfExecutable: push.CopySelfExecutable,
 		chartCache:         &loadedCharts{byOpts: make(map[string]*loadedChart)},
 	}
