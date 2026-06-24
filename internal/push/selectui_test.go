@@ -30,7 +30,7 @@ func TestSelectModelToggleAndSelectedSpecs(t *testing.T) {
 		),
 	}
 
-	model := newSelectModel(items, 10)
+	model := newSelectModel(items, 10, "")
 
 	// Initially no items selected
 	if got := model.selectedCount(); got != 0 {
@@ -75,7 +75,7 @@ func TestSelectModelMoveClampsAndScrolls(t *testing.T) {
 		newClassifiedImageForTest(pushspec.ArchiveSpec{Image: "image5", Target: "target5"}, statusPushable),
 	}
 
-	model := newSelectModel(items, 2)
+	model := newSelectModel(items, 2, "")
 
 	// moveUp at top keeps cursor at 0
 	model.moveUp()
@@ -118,7 +118,7 @@ func TestSelectModelToggleAll(t *testing.T) {
 		newClassifiedImageForTest(pushspec.ArchiveSpec{Image: "image3", Target: "target3"}, statusPushable),
 	}
 
-	model := newSelectModel(items, 10)
+	model := newSelectModel(items, 10, "")
 
 	// toggleAll when nothing checked -> all checked
 	model.toggleAll()
@@ -156,7 +156,7 @@ func TestSelectModelRender(t *testing.T) {
 		),
 	}
 
-	model := newSelectModel(items, 10)
+	model := newSelectModel(items, 10, "registry.local:5000/")
 
 	lines := model.render()
 
@@ -180,6 +180,9 @@ func TestSelectModelRender(t *testing.T) {
 	}
 	if !strings.Contains(itemLine, "busybox:1.36") {
 		t.Fatalf("item line missing image: %q", itemLine)
+	}
+	if !strings.Contains(itemLine, "registry.local:5000/library/busybox:1.36") {
+		t.Fatalf("item line missing registry-qualified target: %q", itemLine)
 	}
 	if !strings.Contains(itemLine, "[missing]") {
 		t.Fatalf("item line missing status: %q", itemLine)
@@ -281,7 +284,7 @@ func TestSelectModelRenderScrolling(t *testing.T) {
 	}
 
 	// Height 2 means only 2 items visible plus header and footer
-	model := newSelectModel(items, 2)
+	model := newSelectModel(items, 2, "")
 
 	// Move to last item
 	for i := 0; i < 4; i++ {
@@ -334,7 +337,7 @@ func TestColorizeRenderLines(t *testing.T) {
 	model := newSelectModel([]classifiedImage{
 		newClassifiedImageForTest(pushspec.ArchiveSpec{Image: "a", Target: "a"}, statusPushable),
 		newClassifiedImageForTest(pushspec.ArchiveSpec{Image: "b", Target: "b"}, statusConflict),
-	}, 10)
+	}, 10, "")
 	model.checked[0] = true
 
 	lines := model.render()

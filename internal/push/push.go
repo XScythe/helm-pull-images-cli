@@ -94,7 +94,7 @@ func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
 		}
 
 		var cancelled bool
-		selected, cancelled, err = runSelect(opts.In, opts.Out, classified)
+		selected, cancelled, err = runSelect(opts.In, opts.Out, classified, opts.Registry)
 		if err != nil {
 			return fmt.Errorf("select images: %w", err)
 		}

@@ -6,6 +6,7 @@ import (
 	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
+	"strings"
 
 	"golang.org/x/term"
 )
@@ -22,14 +23,15 @@ const (
 )
 
 type selectModel struct {
-	items   []classifiedImage
-	cursor  int
-	checked []bool
-	top     int
-	height  int
+	items    []classifiedImage
+	registry string
+	cursor   int
+	checked  []bool
+	top      int
+	height   int
 }
 
-func newSelectModel(items []classifiedImage, height int) *selectModel {
+func newSelectModel(items []classifiedImage, height int, registry string) *selectModel {
 	if height < 1 {
 		if len(items) > 0 {
 			height = len(items)
@@ -38,11 +40,12 @@ func newSelectModel(items []classifiedImage, height int) *selectModel {
 		}
 	}
 	return &selectModel{
-		items:   items,
-		cursor:  0,
-		checked: make([]bool, len(items)),
-		top:     0,
-		height:  height,
+		items:    items,
+		registry: strings.TrimRight(registry, "/"),
+		cursor:   0,
+		checked:  make([]bool, len(items)),
+		top:      0,
+		height:   height,
 	}
 }
 
@@ -121,7 +124,11 @@ func (m *selectModel) render() []string {
 		if m.checked[i] {
 			checkbox = "◉ "
 		}
-		body := normalizeDisplayImage(m.items[i].Spec.Image) + " → " + m.items[i].Spec.Target
+		target := m.items[i].Spec.Target
+		if m.registry != "" {
+			target = m.registry + "/" + target
+		}
+		body := normalizeDisplayImage(m.items[i].Spec.Image) + " → " + target
 		status := ""
 		switch m.items[i].Status {
 		case statusPushable:
@@ -303,13 +310,13 @@ func clearProgressBlockChecked(w io.Writer, lines int) error {
 	return nil
 }
 
-func runSelect(in io.Reader, out io.Writer, items []classifiedImage) (selected []pushspec.ArchiveSpec, cancelled bool, err error) {
+func runSelect(in io.Reader, out io.Writer, items []classifiedImage, registry string) (selected []pushspec.ArchiveSpec, cancelled bool, err error) {
 	if len(items) == 0 {
 		return nil, false, nil
 	}
 
 	height := viewportHeight(out, len(items))
-	model := newSelectModel(items, height)
+	model := newSelectModel(items, height, registry)
 
 	var state *term.State
 	var inputFD int
