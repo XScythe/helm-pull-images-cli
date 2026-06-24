@@ -26,6 +26,14 @@ function Get-ReleaseAssetUrl {
     ($Release.assets | Where-Object { $_.name -eq $Name } | Select-Object -First 1).browser_download_url
 }
 
+function Find-ReleaseAsset {
+    param(
+        [object]$Release,
+        [string]$Pattern
+    )
+    $Release.assets | Where-Object { $_.name -match $Pattern } | Select-Object -First 1
+}
+
 function Get-ChecksumLine {
     param(
         [string]$ChecksumsPath,
@@ -61,11 +69,12 @@ if ($Version -ne "latest") {
 
 $release = Invoke-RestMethod -Uri $ApiUrl
 $tag = if ($release.tag_name) { $release.tag_name } else { $Version }
-$archiveName = "helm-deep-pack_{0}_windows_{1}.zip" -f $tag, $Arch
-$archiveUrl = Get-ReleaseAssetUrl -Release $release -Name $archiveName
-if (-not $archiveUrl) {
+$archiveAsset = Find-ReleaseAsset -Release $release -Pattern ("^helm-deep-pack_.+_windows_{0}\.zip$" -f [Regex]::Escape($Arch))
+if (-not $archiveAsset) {
     throw "No release archive found for windows/$Arch"
 }
+$archiveName = $archiveAsset.name
+$archiveUrl = $archiveAsset.browser_download_url
 
 $checksumsUrl = Get-ReleaseAssetUrl -Release $release -Name "checksums.txt"
 
