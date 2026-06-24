@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"helm-deep-pack/internal/pushspec"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -53,6 +55,14 @@ func isTerminalReader(r io.Reader) bool {
 }
 
 func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
+	return pushImages(ctx, opts, newRegistryProbeClient(), status...)
+}
+
+func pushImages(ctx context.Context, opts Options, probeClient *http.Client, status ...io.Writer) error {
+	if err := preflightRegistry(ctx, opts.Registry, probeClient); err != nil {
+		return fmt.Errorf("preflight registry argument: %w", err)
+	}
+
 	resolvedInputDir, err := resolvePushInputDir(opts.InputDir)
 	if err != nil {
 		return fmt.Errorf("resolve push input dir: %w", err)
@@ -129,6 +139,55 @@ func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
 	}
 
 	return pushSpecs(ctx, opts.Registry, layoutPath, selected, opts.Concurrency, status...)
+}
+
+func newRegistryProbeClient() *http.Client {
+	return &http.Client{Timeout: 5 * time.Second}
+}
+
+func preflightRegistry(ctx context.Context, registry string, probeClient *http.Client) (err error) {
+	registry = strings.TrimRight(registry, "/")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+registry+"/v2/", nil)
+	if err != nil {
+		return fmt.Errorf("build registry probe request: %w", err)
+	}
+	if probeClient == nil {
+		probeClient = newRegistryProbeClient()
+	}
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("registry %q is not reachable: %w", registry, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close registry probe response: %w", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return fmt.Errorf("read registry probe response: %w", err)
+	}
+	if looksLikeWebsiteContent(resp.Header.Get("Content-Type"), body) {
+		return fmt.Errorf("registry %q is reachable but looks like a website, not an image registry", registry)
+	}
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusUnauthorized, http.StatusForbidden:
+		return nil
+	default:
+		return fmt.Errorf("registry %q is reachable but did not expose the container registry API at /v2/ (status %s)", registry, resp.Status)
+	}
+}
+
+func looksLikeWebsiteContent(contentType string, body []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "text/html") {
+		return true
+	}
+
+	lowerBody := strings.ToLower(string(body))
+	return strings.Contains(lowerBody, "<!doctype html") || strings.Contains(lowerBody, "<html")
 }
 
 func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, specs []pushspec.ArchiveSpec, concurrency int, status ...io.Writer) error {

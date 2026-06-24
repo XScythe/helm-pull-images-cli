@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"helm-deep-pack/internal/pushspec"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +20,42 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func withRegistryProbeClient(t *testing.T, fn func(*http.Request) (*http.Response, error)) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: roundTripperFunc(fn)}
+}
+
+func registryProbeResponse(status int, contentType, body string) *http.Response {
+	headers := make(http.Header)
+	if contentType != "" {
+		headers.Set("Content-Type", contentType)
+	}
+	headers.Set("Docker-Distribution-Api-Version", "registry/2.0")
+
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     headers,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func pushImagesForTest(t *testing.T, client *http.Client, opts Options, status ...io.Writer) error {
+	t.Helper()
+	return pushImages(context.Background(), opts, client, status...)
+}
+
 func TestPushImagesUsesManifestDigests(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
 	originalResolveExec := resolveExecutablePath
@@ -60,7 +98,7 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 4, All: true}); err != nil {
+	if err := pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 4, All: true}); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -83,6 +121,10 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 }
 
 func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
 	originalResolveExec := resolveExecutablePath
@@ -124,7 +166,7 @@ func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
+	if err := pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -135,6 +177,10 @@ func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 }
 
 func TestPushImagesFallsBackToWorkingDirWhenExecutableDirHasNoManifest(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
 	originalResolveExec := resolveExecutablePath
@@ -181,7 +227,7 @@ func TestPushImagesFallsBackToWorkingDirWhenExecutableDirHasNoManifest(t *testin
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
+	if err := pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -296,6 +342,10 @@ func TestCopyImageToRegistryPreservesRegistry404Errors(t *testing.T) {
 }
 
 func TestPushImagesReportsProgress(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
 	originalResolveExec := resolveExecutablePath
@@ -329,7 +379,7 @@ func TestPushImagesReportsProgress(t *testing.T) {
 	}
 
 	status := new(bytes.Buffer)
-	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true}, status); err != nil {
+	if err := pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true}, status); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -346,6 +396,10 @@ func TestPushImagesReportsProgress(t *testing.T) {
 }
 
 func TestPushImagesInteractiveRequiresTerminal(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	original := copyImageToRegistry
 	originalLoadLayout := loadOCILayout
 	originalResolveExec := resolveExecutablePath
@@ -383,7 +437,7 @@ func TestPushImagesInteractiveRequiresTerminal(t *testing.T) {
 	}
 
 	// Use strings.NewReader which is not a terminal
-	err = PushImages(context.Background(), Options{
+	err = pushImagesForTest(t, probeClient, Options{
 		Registry:    "registry.local:5000",
 		InputDir:    dir,
 		Concurrency: 1,
@@ -400,7 +454,100 @@ func TestPushImagesInteractiveRequiresTerminal(t *testing.T) {
 	}
 }
 
+func TestPushImagesRejectsUnreachableRegistryBeforeSelection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	registry := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err = pushImagesForTest(t, nil, Options{
+		Registry:    registry,
+		InputDir:    t.TempDir(),
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+		Out:         &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want unreachable registry error")
+	}
+	if !strings.Contains(err.Error(), "not reachable") {
+		t.Fatalf("PushImages() error = %v, want reachability error", err)
+	}
+}
+
+func TestPushImagesRejectsWebsiteLikeRegistryBeforeSelection(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "text/html; charset=utf-8", "<!doctype html><html><body>hello</body></html>"), nil
+	})
+
+	err := pushImagesForTest(t, probeClient, Options{
+		Registry:    "registry.local:5000",
+		InputDir:    t.TempDir(),
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+		Out:         &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want website-like registry error")
+	}
+	if !strings.Contains(err.Error(), "looks like a website") {
+		t.Fatalf("PushImages() error = %v, want website-like error", err)
+	}
+}
+
+func TestPushImagesAcceptsRegistryPreflightBeforeSelection(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusUnauthorized, "application/json", ""), nil
+	})
+
+	originalLoadLayout := loadOCILayout
+	defer func() {
+		loadOCILayout = originalLoadLayout
+	}()
+	loadOCILayout = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+
+	dir := t.TempDir()
+	manifest, err := pushspec.GeneratePushManifest([]pushspec.ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}})
+	if err != nil {
+		t.Fatalf("pushspec.GeneratePushManifest() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err = pushImagesForTest(t, probeClient, Options{
+		Registry:    "registry.local:5000",
+		InputDir:    dir,
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+		Out:         &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want terminal selection error after successful preflight")
+	}
+	if !strings.Contains(err.Error(), "requires terminal input and output") {
+		t.Fatalf("PushImages() error = %v, want terminal selection error", err)
+	}
+}
+
 func TestPushImagesRejectsManifestLayoutDirTraversal(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	originalResolveExec := resolveExecutablePath
 	defer func() {
 		resolveExecutablePath = originalResolveExec
@@ -428,7 +575,7 @@ func TestPushImagesRejectsManifestLayoutDirTraversal(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	err = PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
+	err = pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
 	if err == nil {
 		t.Fatal("PushImages() error = nil, want layoutDir traversal error")
 	}
@@ -438,6 +585,10 @@ func TestPushImagesRejectsManifestLayoutDirTraversal(t *testing.T) {
 }
 
 func TestPushImagesRejectsManifestLayoutDirAbsolutePath(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
 	originalResolveExec := resolveExecutablePath
 	defer func() {
 		resolveExecutablePath = originalResolveExec
@@ -465,7 +616,7 @@ func TestPushImagesRejectsManifestLayoutDirAbsolutePath(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	err = PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
+	err = pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
 	if err == nil {
 		t.Fatal("PushImages() error = nil, want absolute layoutDir error")
 	}
