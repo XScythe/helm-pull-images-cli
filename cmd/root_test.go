@@ -10,7 +10,7 @@ import (
 
 // TestRootCmd_HasSubcommands verifies root command has the expected subcommands.
 func TestRootCmd_HasSubcommands(t *testing.T) {
-	commands := []string{"pull", "push"}
+	commands := []string{"pull", "push", "upgrade"}
 	for _, cmdName := range commands {
 		found := false
 		for _, cmd := range rootCmd.Commands() {
@@ -33,7 +33,7 @@ func TestRootCmd_HelpFlag(t *testing.T) {
 	}
 	// Help output should mention subcommands
 	helpOutput := output.Stdout + output.Stderr
-	if !strings.Contains(helpOutput, "pull") || !strings.Contains(helpOutput, "push") {
+	if !strings.Contains(helpOutput, "pull") || !strings.Contains(helpOutput, "push") || !strings.Contains(helpOutput, "upgrade") {
 		t.Fatalf("help output missing subcommand mentions: %s", helpOutput)
 	}
 }
@@ -101,5 +101,27 @@ func TestRootCmd_PushSubcommand(t *testing.T) {
 	helpOutput := output.Stdout + output.Stderr
 	if !strings.Contains(helpOutput, "REGISTRY") {
 		t.Fatalf("push help missing 'REGISTRY' argument: %s", helpOutput)
+	}
+}
+
+func TestRootCmd_UpgradeSubcommand(t *testing.T) {
+	output := ExecuteCommand(rootCmd, []string{"upgrade", "--help"})
+	if output.Err != nil {
+		t.Fatalf("upgrade subcommand --help failed: %v", output.Err)
+	}
+	helpOutput := output.Stdout + output.Stderr
+	if !strings.Contains(helpOutput, "latest stable") {
+		t.Fatalf("upgrade help missing expected text: %s", helpOutput)
+	}
+}
+
+func TestRootCmd_VersionFlag(t *testing.T) {
+	output := ExecuteCommand(rootCmd, []string{"--version"})
+	if output.Err != nil {
+		t.Fatalf("--version should not produce error: %v", output.Err)
+	}
+	combined := output.Stdout + output.Stderr
+	if !strings.Contains(combined, "helm-deep-pack") {
+		t.Fatalf("expected version output to include binary name, got: %s", combined)
 	}
 }

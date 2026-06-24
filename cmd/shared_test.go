@@ -13,6 +13,7 @@ import (
 	pushpkg "helm-deep-pack/internal/push"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type CapturedOutput struct {
@@ -38,9 +39,28 @@ func ExecuteCommand(cmd *cobra.Command, args []string) *CapturedOutput {
 		resetCmdVars(targetCmd)
 		defer resetCmdVars(targetCmd)
 	}
+	if targetCmd == "upgrade" {
+		resetCmdVars(targetCmd)
+		defer resetCmdVars(targetCmd)
+	}
 
 	origOut := execCmd.OutOrStdout()
 	origErr := execCmd.ErrOrStderr()
+	flagSets := []*pflag.FlagSet{
+		rootCmd.Flags(),
+		rootCmd.PersistentFlags(),
+		execCmd.Flags(),
+		execCmd.PersistentFlags(),
+	}
+	for _, flagSet := range flagSets {
+		if flagSet == nil {
+			continue
+		}
+		if flag := flagSet.Lookup("version"); flag != nil {
+			_ = flag.Value.Set("false")
+			flag.Changed = false
+		}
+	}
 
 	execCmd.SetOut(stdout)
 	execCmd.SetErr(stderr)
@@ -155,6 +175,11 @@ func resetCmdVars(cmdName string) {
 		pushConcurrency = 4
 		pushAll = false
 		pushVerbose = false
+	case "upgrade":
+		upgradeTargetVersion = ""
+		upgradeForce = false
+		upgradeAssumeYes = false
+		upgradeVerbose = false
 	default:
 		panic("resetCmdVars: unknown command " + cmdName)
 	}

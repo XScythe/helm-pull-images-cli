@@ -16,6 +16,7 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X helm-deep-pack/cmd.version={{ .Version }}
     goos:
       - linux
       - darwin

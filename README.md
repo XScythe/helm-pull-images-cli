@@ -47,6 +47,18 @@ Push staged images to a registry:
 helm-deep-pack push registry.internal:5000 --input-dir ./prometheus-node-exporter
 ```
 
+Upgrade in-place to the latest stable release:
+
+```bash
+helm-deep-pack upgrade
+```
+
+Pin to a specific release:
+
+```bash
+helm-deep-pack upgrade --version 1.2.3 --yes
+```
+
 ## Pull command
 
 ```bash
@@ -79,6 +91,17 @@ helm-deep-pack push registry.internal:5000 --input-dir ./prometheus-node-exporte
 
 If `--input-dir` is omitted, `push` looks for `push_images.json` next to the running executable, then in the current working directory.
 
+## Upgrade command
+
+```bash
+helm-deep-pack upgrade [--version VERSION] [--force] [--yes]
+```
+
+- Without `--version`, `upgrade` installs the latest stable GitHub release.
+- `--version` accepts either `1.2.3` or `v1.2.3`.
+- `--yes` skips the confirmation prompt.
+- `--force` reinstalls even when already on the selected version.
+
 ## Private OCI chart registries
 
 For private OCI registries, authenticate first:
@@ -93,6 +116,8 @@ helm registry login registry.example.com
 
 ```bash
 helm-deep-pack --help
+helm-deep-pack --version
 helm-deep-pack pull --help
 helm-deep-pack push --help
+helm-deep-pack upgrade --help
 ```
