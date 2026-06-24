@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	pullpkg "helm-deep-pack/internal/pull"
+	pushpkg "helm-deep-pack/internal/push"
 
 	"github.com/spf13/cobra"
 )
@@ -119,21 +120,17 @@ func spyPullRun(retErr error) (*pullCapture, func()) {
 }
 
 type pushCapture struct {
-	called      bool
-	registry    string
-	inputDir    string
-	concurrency int
+	called bool
+	opts   pushpkg.Options
 }
 
 func spyPushRun(retErr error) (*pushCapture, func()) {
 	resetCmdVars("push")
 	capture := &pushCapture{}
 	orig := pushRun
-	pushRun = func(_ context.Context, registry, inputDir string, concurrency int, _ ...io.Writer) error {
+	pushRun = func(_ context.Context, opts pushpkg.Options, _ ...io.Writer) error {
 		capture.called = true
-		capture.registry = registry
-		capture.inputDir = inputDir
-		capture.concurrency = concurrency
+		capture.opts = opts
 		return retErr
 	}
 
@@ -156,6 +153,7 @@ func resetCmdVars(cmdName string) {
 		pushRegistry = ""
 		pushInputDir = ""
 		pushConcurrency = 4
+		pushAll = false
 		pushVerbose = false
 	default:
 		panic("resetCmdVars: unknown command " + cmdName)

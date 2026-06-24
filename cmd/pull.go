@@ -16,6 +16,7 @@ var (
 	pullVersion     string
 	pullOutputDir   string
 	pullConcurrency int
+	pullAllowHTTP   bool
 	pullVerbose     bool
 )
 
@@ -49,7 +50,7 @@ var pullCmd = &cobra.Command{
 					return err
 				}
 			} else {
-				if err := validation.ValidateURL("--repo", pullRepo); err != nil {
+				if err := validation.ValidateURL("--repo", pullRepo, pullAllowHTTP); err != nil {
 					return err
 				}
 			}
@@ -81,10 +82,11 @@ var pullCmd = &cobra.Command{
 }
 
 func init() {
-	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL (http/https or oci://; optional; if not provided, searches configured Helm repositories)")
+	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL (https or oci:// by default; optional; if not provided, searches configured Helm repositories)")
 	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
 	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script")
 	pullCmd.Flags().IntVar(&pullConcurrency, "concurrency", 4, "Number of images to fetch and stage concurrently")
+	pullCmd.Flags().BoolVar(&pullAllowHTTP, "allow-insecure-http", false, "Allow plaintext HTTP for Helm repository URLs")
 	pullCmd.Flags().BoolVar(&pullVerbose, "verbose", false, "Enable verbose logging")
 }
 

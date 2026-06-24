@@ -169,7 +169,7 @@ func loadHelmRepoChart(ctx context.Context, opts Options) (loadedChart, error) {
 	if err != nil {
 		return loadedChart{}, fmt.Errorf("prepare chart archive request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := outboundHTTPClient.Do(req)
 	if err != nil {
 		return loadedChart{}, fmt.Errorf("fetch chart archive: %w", err)
 	}

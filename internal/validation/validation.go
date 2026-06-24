@@ -36,9 +36,9 @@ func maxConcurrency() int {
 	return max
 }
 
-// ValidateURL checks that a string is a valid URL with a scheme.
+// ValidateURL checks that a string is a valid repository URL.
 // Delegates to Go's standard url.Parse.
-func ValidateURL(name, value string) error {
+func ValidateURL(name, value string, allowInsecureHTTP bool) error {
 	u, err := url.Parse(value)
 	if err != nil {
 		return fmt.Errorf("%s must be a valid URL: %w", name, err)
@@ -48,7 +48,10 @@ func ValidateURL(name, value string) error {
 		return fmt.Errorf("%s must be a valid URL with scheme (http/https): %q", name, value)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("%s must use http or https scheme: %q", name, value)
+		return fmt.Errorf("%s must use https scheme (or oci://) for remote repos: %q", name, value)
+	}
+	if u.Scheme == "http" && !allowInsecureHTTP {
+		return fmt.Errorf("%s must use https scheme unless --allow-insecure-http is set: %q", name, value)
 	}
 	return nil
 }

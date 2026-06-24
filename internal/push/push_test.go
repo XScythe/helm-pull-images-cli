@@ -3,6 +3,7 @@ package push
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"helm-deep-pack/internal/pushspec"
 	"os"
@@ -59,7 +60,7 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := PushImages(context.Background(), "registry.local:5000", dir, 4); err != nil {
+	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 4, All: true}); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -96,6 +97,7 @@ func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 	}
 
 	baseDir := t.TempDir()
+	t.Chdir(baseDir)
 	helperDir := filepath.Join(baseDir, "helper")
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -122,11 +124,68 @@ func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	if err := PushImages(context.Background(), "registry.local:5000", "", 2); err != nil {
+	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
 	wantLayoutPath := filepath.Join(helperDir, pushspec.OCILayoutDirName())
+	if writtenLayoutPath != wantLayoutPath {
+		t.Fatalf("layout path = %q, want %q", writtenLayoutPath, wantLayoutPath)
+	}
+}
+
+func TestPushImagesFallsBackToWorkingDirWhenExecutableDirHasNoManifest(t *testing.T) {
+	original := copyImageToRegistry
+	originalLoadLayout := loadOCILayout
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		copyImageToRegistry = original
+		loadOCILayout = originalLoadLayout
+		resolveExecutablePath = originalResolveExec
+	}()
+
+	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+		return nil
+	}
+
+	baseDir := t.TempDir()
+	workingDir := filepath.Join(baseDir, "work")
+	helperDir := filepath.Join(baseDir, "helper")
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() working dir error = %v", err)
+	}
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() helper dir error = %v", err)
+	}
+	t.Chdir(workingDir)
+
+	resolveExecutablePath = func() (string, error) {
+		return filepath.Join(helperDir, "push_images"), nil
+	}
+
+	writtenLayoutPath := ""
+	loadOCILayout = func(path string) (layout.Path, error) {
+		writtenLayoutPath = path
+		return layout.Path(path), nil
+	}
+
+	manifest, err := pushspec.GeneratePushManifest([]pushspec.ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}})
+	if err != nil {
+		t.Fatalf("pushspec.GeneratePushManifest() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDir, pushspec.PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: "", Concurrency: 2, All: true}); err != nil {
+		t.Fatalf("PushImages() error = %v", err)
+	}
+
+	wantLayoutPath := filepath.Join(workingDir, pushspec.OCILayoutDirName())
 	if writtenLayoutPath != wantLayoutPath {
 		t.Fatalf("layout path = %q, want %q", writtenLayoutPath, wantLayoutPath)
 	}
@@ -270,7 +329,7 @@ func TestPushImagesReportsProgress(t *testing.T) {
 	}
 
 	status := new(bytes.Buffer)
-	if err := PushImages(context.Background(), "registry.local:5000", dir, 1, status); err != nil {
+	if err := PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true}, status); err != nil {
 		t.Fatalf("PushImages() error = %v", err)
 	}
 
@@ -284,4 +343,207 @@ func TestPushImagesReportsProgress(t *testing.T) {
 	if !strings.Contains(got, "pushing 1/1: busybox:1.36") {
 		t.Fatalf("PushImages() status = %q", got)
 	}
+}
+
+func TestPushImagesInteractiveRequiresTerminal(t *testing.T) {
+	original := copyImageToRegistry
+	originalLoadLayout := loadOCILayout
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		copyImageToRegistry = original
+		loadOCILayout = originalLoadLayout
+		resolveExecutablePath = originalResolveExec
+	}()
+
+	// Mock network operations so they don't run
+	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+		return nil
+	}
+	loadOCILayout = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	resolveExecutablePath = func() (string, error) {
+		return "/unused/helper", nil
+	}
+
+	dir := t.TempDir()
+	manifest, err := pushspec.GeneratePushManifest([]pushspec.ArchiveSpec{
+		{
+			Image:     "busybox:1.36",
+			Target:    "library/busybox:1.36",
+			OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	})
+	if err != nil {
+		t.Fatalf("pushspec.GeneratePushManifest() error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Use strings.NewReader which is not a terminal
+	err = PushImages(context.Background(), Options{
+		Registry:    "registry.local:5000",
+		InputDir:    dir,
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+	})
+
+	if err == nil {
+		t.Fatalf("PushImages() error = nil, want non-nil error for non-terminal input")
+	}
+
+	if !strings.Contains(err.Error(), "requires terminal input and output") {
+		t.Fatalf("PushImages() error = %v, want message containing 'requires terminal input and output'", err)
+	}
+}
+
+func TestPushImagesRejectsManifestLayoutDirTraversal(t *testing.T) {
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		resolveExecutablePath = originalResolveExec
+	}()
+	resolveExecutablePath = func() (string, error) {
+		return "/unused/helper", nil
+	}
+
+	dir := t.TempDir()
+	manifest := pushspec.PushManifest{
+		LayoutDir: "../outside-layout",
+		Images: []pushspec.ArchiveSpec{
+			{
+				Image:     "busybox:1.36",
+				Target:    "library/busybox:1.36",
+				OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+		},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err = PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want layoutDir traversal error")
+	}
+	if !strings.Contains(err.Error(), "layoutDir") {
+		t.Fatalf("PushImages() error = %v", err)
+	}
+}
+
+func TestPushImagesRejectsManifestLayoutDirAbsolutePath(t *testing.T) {
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		resolveExecutablePath = originalResolveExec
+	}()
+	resolveExecutablePath = func() (string, error) {
+		return "/unused/helper", nil
+	}
+
+	dir := t.TempDir()
+	manifest := pushspec.PushManifest{
+		LayoutDir: filepath.Join(string(filepath.Separator), "tmp", "layout"),
+		Images: []pushspec.ArchiveSpec{
+			{
+				Image:     "busybox:1.36",
+				Target:    "library/busybox:1.36",
+				OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+		},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), append(data, '\n'), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err = PushImages(context.Background(), Options{Registry: "registry.local:5000", InputDir: dir, Concurrency: 1, All: true})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want absolute layoutDir error")
+	}
+	if !strings.Contains(err.Error(), "layoutDir") {
+		t.Fatalf("PushImages() error = %v", err)
+	}
+}
+
+func TestSelectedConflicts(t *testing.T) {
+	selected := []pushspec.ArchiveSpec{
+		{Image: "a:v1", Target: "a:v1", OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{Image: "b:v1", Target: "b:v1", OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	}
+	classified := []classifiedImage{
+		{Spec: selected[0], Status: statusConflict, RemoteDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		{Spec: selected[1], Status: statusMirrored},
+		{Spec: pushspec.ArchiveSpec{Image: "c:v1", Target: "c:v1", OCIDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, Status: statusConflict},
+	}
+
+	got := selectedConflicts(selected, classified)
+	if len(got) != 1 {
+		t.Fatalf("selectedConflicts() len = %d, want 1", len(got))
+	}
+	if got[0].Spec.Target != "a:v1" {
+		t.Fatalf("selectedConflicts()[0].Spec.Target = %q, want %q", got[0].Spec.Target, "a:v1")
+	}
+}
+
+func TestConfirmConflictSelection(t *testing.T) {
+	t.Run("yes", func(t *testing.T) {
+		out := new(bytes.Buffer)
+		confirmed, err := confirmConflictSelection(strings.NewReader("yes\n"), out, []classifiedImage{
+			{
+				Spec:         pushspec.ArchiveSpec{Target: "a:v1", OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				Status:       statusConflict,
+				RemoteDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			},
+		})
+		if err != nil {
+			t.Fatalf("confirmConflictSelection() error = %v", err)
+		}
+		if !confirmed {
+			t.Fatal("confirmConflictSelection() confirmed = false, want true")
+		}
+		if !strings.Contains(out.String(), "WARNING:") {
+			t.Fatalf("warning output missing, got: %q", out.String())
+		}
+		if !strings.Contains(out.String(), "current=sha256:bbbb") || !strings.Contains(out.String(), "staged=sha256:aaaa") {
+			t.Fatalf("digest details missing in warning output: %q", out.String())
+		}
+	})
+
+	t.Run("no", func(t *testing.T) {
+		out := new(bytes.Buffer)
+		confirmed, err := confirmConflictSelection(strings.NewReader("no\n"), out, []classifiedImage{
+			{Spec: pushspec.ArchiveSpec{Target: "a:v1", OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: statusConflict, RemoteDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		})
+		if err != nil {
+			t.Fatalf("confirmConflictSelection() error = %v", err)
+		}
+		if confirmed {
+			t.Fatal("confirmConflictSelection() confirmed = true, want false")
+		}
+	})
+
+	t.Run("invalid then yes", func(t *testing.T) {
+		out := new(bytes.Buffer)
+		confirmed, err := confirmConflictSelection(strings.NewReader("maybe\ny\n"), out, []classifiedImage{
+			{Spec: pushspec.ArchiveSpec{Target: "a:v1", OCIDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: statusConflict, RemoteDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		})
+		if err != nil {
+			t.Fatalf("confirmConflictSelection() error = %v", err)
+		}
+		if !confirmed {
+			t.Fatal("confirmConflictSelection() confirmed = false, want true")
+		}
+		if !strings.Contains(out.String(), "Please type yes or no.") {
+			t.Fatalf("expected retry hint, got: %q", out.String())
+		}
+	})
 }

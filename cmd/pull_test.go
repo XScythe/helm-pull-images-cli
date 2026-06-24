@@ -16,7 +16,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestPullCmd_FlagsRegistered(t *testing.T) {
-	flags := []string{"repo", "version", "output-dir", "concurrency", "verbose"}
+	flags := []string{"repo", "version", "output-dir", "concurrency", "allow-insecure-http", "verbose"}
 	for _, flag := range flags {
 		AssertFlagExists(t, pullCmd, flag)
 	}
@@ -28,11 +28,12 @@ func TestPullCmd_FlagsNotExposed(t *testing.T) {
 
 func TestPullCmd_FlagTypes(t *testing.T) {
 	tests := map[string]string{
-		"repo":        "string",
-		"version":     "string",
-		"output-dir":  "string",
-		"concurrency": "int",
-		"verbose":     "bool",
+		"repo":                "string",
+		"version":             "string",
+		"output-dir":          "string",
+		"concurrency":         "int",
+		"allow-insecure-http": "bool",
+		"verbose":             "bool",
 	}
 	for flagName, expectedType := range tests {
 		AssertFlagType(t, pullCmd, flagName, expectedType)
@@ -41,11 +42,12 @@ func TestPullCmd_FlagTypes(t *testing.T) {
 
 func TestPullCmd_FlagDefaults(t *testing.T) {
 	tests := map[string]string{
-		"repo":        "",
-		"version":     "",
-		"output-dir":  "",
-		"concurrency": "4",
-		"verbose":     "false",
+		"repo":                "",
+		"version":             "",
+		"output-dir":          "",
+		"concurrency":         "4",
+		"allow-insecure-http": "false",
+		"verbose":             "false",
 	}
 	for flagName, expectedDefault := range tests {
 		AssertFlagDefault(t, pullCmd, flagName, expectedDefault)
@@ -115,7 +117,6 @@ func TestPullCmd_ValidateRepoURLInvalid(t *testing.T) {
 func TestPullCmd_ValidateRepoURLValid(t *testing.T) {
 	validURLs := []string{
 		"https://charts.example.com",
-		"http://charts.example.com",
 		"https://kubernetes.github.io/ingress-nginx",
 	}
 	for _, url := range validURLs {
@@ -131,6 +132,19 @@ func TestPullCmd_ValidateRepoURLValid(t *testing.T) {
 				t.Fatalf("expected workflow to be called for repo %q", url)
 			}
 		})
+	}
+}
+
+func TestPullCmd_ValidateRepoURLHTTPAllowedWithFlag(t *testing.T) {
+	capture, restore := spyPullRun(nil)
+	defer restore()
+
+	output := ExecuteCommand(pullCmd, []string{"nginx", "--repo", "http://charts.example.com", "--allow-insecure-http"})
+	if output.Err != nil {
+		t.Fatalf("expected HTTP repo URL to pass when --allow-insecure-http is set, got: %v", output.Err)
+	}
+	if !capture.called {
+		t.Fatal("expected workflow to be called for HTTP repo URL with --allow-insecure-http")
 	}
 }
 

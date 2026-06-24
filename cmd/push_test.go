@@ -7,7 +7,7 @@ import (
 )
 
 func TestPushCmd_FlagsRegistered(t *testing.T) {
-	flags := []string{"input-dir", "concurrency", "verbose"}
+	flags := []string{"input-dir", "concurrency", "all", "verbose"}
 	for _, flag := range flags {
 		AssertFlagExists(t, pushCmd, flag)
 	}
@@ -24,6 +24,7 @@ func TestPushCmd_FlagTypes(t *testing.T) {
 	tests := map[string]string{
 		"input-dir":   "string",
 		"concurrency": "int",
+		"all":         "bool",
 		"verbose":     "bool",
 	}
 	for flagName, expectedType := range tests {
@@ -35,6 +36,7 @@ func TestPushCmd_FlagDefaults(t *testing.T) {
 	tests := map[string]string{
 		"input-dir":   "",
 		"concurrency": "4",
+		"all":         "false",
 		"verbose":     "false",
 	}
 	for flagName, expectedDefault := range tests {
@@ -132,16 +134,18 @@ func TestPushCmd_FlagsMapToArgs(t *testing.T) {
 		wantRegistry    string
 		wantInputDir    string
 		wantConcurrency int
+		wantAll         bool
 	}{
-		{"minimal", []string{"docker.io"}, "docker.io", "", 4},
-		{"with input-dir", []string{"docker.io", "--input-dir", "/tmp/images"}, "docker.io", "/tmp/images", 4},
-		{"with concurrency", []string{"docker.io", "--concurrency", "8"}, "docker.io", "", 8},
+		{"minimal", []string{"docker.io"}, "docker.io", "", 4, false},
+		{"with input-dir", []string{"docker.io", "--input-dir", "/tmp/images"}, "docker.io", "/tmp/images", 4, false},
+		{"with concurrency", []string{"docker.io", "--concurrency", "8"}, "docker.io", "", 8, false},
 		{
 			"all flags",
-			[]string{"registry.example.com:5000", "--input-dir", "/tmp/nginx-mirror", "--concurrency", "8", "--verbose"},
+			[]string{"registry.example.com:5000", "--input-dir", "/tmp/nginx-mirror", "--concurrency", "8", "--all", "--verbose"},
 			"registry.example.com:5000",
 			"/tmp/nginx-mirror",
 			8,
+			true,
 		},
 	}
 
@@ -157,11 +161,11 @@ func TestPushCmd_FlagsMapToArgs(t *testing.T) {
 			if !capture.called {
 				t.Fatal("expected workflow to be invoked")
 			}
-			if capture.registry != tt.wantRegistry || capture.inputDir != tt.wantInputDir || capture.concurrency != tt.wantConcurrency {
+			if capture.opts.Registry != tt.wantRegistry || capture.opts.InputDir != tt.wantInputDir || capture.opts.Concurrency != tt.wantConcurrency || capture.opts.All != tt.wantAll {
 				t.Fatalf(
-					"args mismatch:\n got reg=%q dir=%q conc=%d\nwant reg=%q dir=%q conc=%d",
-					capture.registry, capture.inputDir, capture.concurrency,
-					tt.wantRegistry, tt.wantInputDir, tt.wantConcurrency,
+					"args mismatch:\n got reg=%q dir=%q conc=%d all=%v\nwant reg=%q dir=%q conc=%d all=%v",
+					capture.opts.Registry, capture.opts.InputDir, capture.opts.Concurrency, capture.opts.All,
+					tt.wantRegistry, tt.wantInputDir, tt.wantConcurrency, tt.wantAll,
 				)
 			}
 		})

@@ -11,6 +11,7 @@ var (
 	pushRegistry    string
 	pushInputDir    string
 	pushConcurrency int
+	pushAll         bool
 	pushVerbose     bool
 )
 
@@ -37,12 +38,20 @@ var pushCmd = &cobra.Command{
 			"concurrency", pushConcurrency,
 		)
 
-		return pushRun(cmd.Context(), pushRegistry, pushInputDir, pushConcurrency, cmd.ErrOrStderr())
+		return pushRun(cmd.Context(), push.Options{
+			Registry:    pushRegistry,
+			InputDir:    pushInputDir,
+			Concurrency: pushConcurrency,
+			All:         pushAll,
+			In:          cmd.InOrStdin(),
+			Out:         cmd.OutOrStdout(),
+		}, cmd.ErrOrStderr())
 	},
 }
 
 func init() {
 	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and OCI layout artifacts")
 	pushCmd.Flags().IntVar(&pushConcurrency, "concurrency", 4, "Number of images to push concurrently")
+	pushCmd.Flags().BoolVar(&pushAll, "all", false, "Push all images without interactive selection")
 	pushCmd.Flags().BoolVar(&pushVerbose, "verbose", false, "Enable verbose logging")
 }

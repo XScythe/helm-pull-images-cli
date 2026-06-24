@@ -9,21 +9,23 @@ func TestValidateURL(t *testing.T) {
 	tests := []struct {
 		name            string
 		value           string
+		allowInsecure   bool
 		wantErr         bool
 		wantErrContains string
 	}{
-		{"valid http URL", "http://example.com", false, ""},
-		{"valid https URL", "https://example.com/path", false, ""},
-		{"empty", "", true, "valid URL"},
-		{"no scheme", "example.com", true, "scheme"},
-		{"invalid URL", "ht!tp://example.com", true, "valid URL"},
-		{"unsupported scheme", "ftp://example.com", true, "http or https"},
-		{"oci scheme", "oci://registry.example.com/charts", true, "http or https"},
+		{"valid http URL with opt-in", "http://example.com", true, false, ""},
+		{"plain http URL rejected by default", "http://example.com", false, true, "--allow-insecure-http"},
+		{"valid https URL", "https://example.com/path", false, false, ""},
+		{"empty", "", false, true, "valid URL"},
+		{"no scheme", "example.com", false, true, "scheme"},
+		{"invalid URL", "ht!tp://example.com", false, true, "valid URL"},
+		{"unsupported scheme", "ftp://example.com", false, true, "https scheme"},
+		{"oci scheme", "oci://registry.example.com/charts", false, true, "https scheme"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateURL("test", tt.value)
+			err := ValidateURL("test", tt.value, tt.allowInsecure)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ValidateURL() error = %v, wantErr %v", err, tt.wantErr)
 			}

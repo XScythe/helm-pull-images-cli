@@ -56,7 +56,7 @@ func loadRepoIndex(ctx context.Context, repoURL string) (map[string][]searchResu
 	if err != nil {
 		return nil, fmt.Errorf("prepare chart index request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := outboundHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch chart index: %w", err)
 	}
