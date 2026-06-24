@@ -1,105 +1,98 @@
 # helm-deep-pack
 
-CLI tool to render Helm charts, extract referenced container images, stage them as OCI layout artifacts, and push them to a target registry.
+`helm-deep-pack` renders Helm charts, finds referenced container images, stages them as OCI artifacts, and pushes them to your target registry.
 
-## Build
+## Install (latest stable)
 
-```bash
-go build ./...
-```
-
-## Pull chart images
+macOS/Linux:
 
 ```bash
-go run . pull CHART [--repo REPO] [--version VERSION] [--output-dir DIR] [--concurrency N] [--allow-insecure-http]
+curl -fsSL https://raw.githubusercontent.com/XScythe/helm-pull-images-cli/main/deploy/install.sh | sh
 ```
+
+Windows (PowerShell):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/XScythe/helm-pull-images-cli/main/deploy/install.ps1 | iex"
+```
+
+Installers detect OS/architecture, download the latest stable release from GitHub, and install `helm-deep-pack`:
+
+- macOS/Linux default: `/usr/local/bin` (or `HELM_DEEP_PACK_INSTALL`)
+- Windows default: `%LOCALAPPDATA%\Programs\helm-deep-pack\bin` (or `HELM_DEEP_PACK_INSTALL`)
+
+Pin a specific release:
+
+```bash
+HELM_DEEP_PACK_VERSION=v1.2.3 curl -fsSL https://raw.githubusercontent.com/XScythe/helm-pull-images-cli/main/deploy/install.sh | sh
+```
+
+```powershell
+$env:HELM_DEEP_PACK_VERSION="v1.2.3"; iwr -useb https://raw.githubusercontent.com/XScythe/helm-pull-images-cli/main/deploy/install.ps1 | iex
+```
+
+## Quick start
+
+Pull images from a chart into an output directory:
+
+```bash
+helm-deep-pack pull prometheus-node-exporter \
+  --repo https://prometheus-community.github.io/helm-charts \
+  --output-dir ./prometheus-node-exporter
+```
+
+Push staged images to a registry:
+
+```bash
+helm-deep-pack push registry.internal:5000 --input-dir ./prometheus-node-exporter
+```
+
+## Pull command
+
+```bash
+helm-deep-pack pull CHART [--repo REPO] [--version VERSION] [--output-dir DIR] [--concurrency N] [--allow-insecure-http]
+```
+
+- `CHART` can be a chart name, local chart path, or `oci://...` reference.
+- `--repo` is HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP chart repositories.
 
 Examples:
 
 ```bash
-go run . pull prometheus-node-exporter --repo https://prometheus-community.github.io/helm-charts
-go run . pull ./charts/my-local-chart
+helm-deep-pack pull ./charts/my-local-chart
+helm-deep-pack pull oci://registry.example.com/charts/mychart --version 1.2.3
 ```
 
-`--repo` uses HTTPS by default; use `--allow-insecure-http` only when a chart
-repository is intentionally exposed over plain HTTP.
-
-## Push staged images
+## Push command
 
 ```bash
-go run . push REGISTRY [--input-dir DIR] [--concurrency N] [--all]
+helm-deep-pack push REGISTRY [--input-dir DIR] [--concurrency N] [--all]
 ```
 
-Example:
+When run in a terminal, `push` is interactive by default so you can choose which images to mirror.
+
+Use `--all` for non-interactive environments (for example CI):
 
 ```bash
-go run . push registry.internal:5000 --input-dir ./prometheus-node-exporter
+helm-deep-pack push registry.internal:5000 --input-dir ./prometheus-node-exporter --all
 ```
 
-If `--input-dir` is omitted, `push` looks for `push_images.json` first next to the
-running executable, then in the current working directory.
+If `--input-dir` is omitted, `push` looks for `push_images.json` next to the running executable, then in the current working directory.
 
-### Interactive selection (default)
+## Private OCI chart registries
 
-By default, `push` is interactive when run in a terminal. It probes the target
-registry for each staged image and opens a checkbox list so you choose exactly
-what to mirror — this avoids polluting the registry with images you didn't intend
-to push.
-
-Key bindings:
-
-- `↑`/`↓` (or `k`/`j`) — move
-- `space` — toggle the highlighted image
-- `a` — toggle all
-- `enter` — push the selected images
-- `esc` / `Ctrl-C` — cancel without pushing
-
-Each image is annotated with its status in the target registry:
-
-- `[missing]` — not present in the registry yet
-- `[exists]` — already present with a matching digest
-- `[conflict]` — the same reference exists with a different digest; if selected, push updates that destination reference to the staged digest
-- `[unknown]` — the registry check failed (a warning is printed); still selectable
-
-If your selection includes any `[conflict]` images, pressing `enter` shows an
-orange warning with the conflicting digest details (`current` vs `staged`),
-potential risks (overwriting existing references, runtime drift, rollback
-complexity), and asks for explicit `yes/no` confirmation before pushing.
-
-Nothing is pre-selected. Confirming with no images checked exits cleanly without
-pushing.
-
-### Non-interactive push
-
-Use `--all` to skip the prompt and push every staged image. This is required when
-there is no terminal (for example in CI); without `--all` in a non-interactive
-environment the command exits with an error.
-
-```bash
-go run . push registry.internal:5000 --input-dir ./prometheus-node-exporter --all
-```
-
-## OCI Helm registries
-
-`pull` supports OCI-hosted charts in both forms:
-
-```bash
-go run . pull oci://registry.example.com/charts/mychart --version 1.2.3
-go run . pull mychart --repo oci://registry.example.com/charts --version 1.2.3
-```
-
-For private registries, authenticate first with Helm:
+For private OCI registries, authenticate first:
 
 ```bash
 helm registry login registry.example.com
 ```
 
-The CLI reuses Helm/Docker registry credentials automatically.
+`helm-deep-pack` reuses existing Helm/Docker registry credentials.
 
-For local OCI registries on `localhost`, plain HTTP is enabled automatically.
-
-Example that works today:
+## Help
 
 ```bash
-go run . pull oci://registry-1.docker.io/bitnamicharts/nginx --version 25.0.10
+helm-deep-pack --help
+helm-deep-pack pull --help
+helm-deep-pack push --help
 ```
