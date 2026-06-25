@@ -185,3 +185,59 @@ func TestValidateImageRegistry(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateImageRegistryWithPath(t *testing.T) {
+	tests := []struct {
+		name            string
+		value           string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{"valid registry", "registry.example.com", false, ""},
+		{"valid registry with path", "registry.example.com/team/sub", false, ""},
+		{"valid registry with trailing slash", "registry.example.com/team/sub/", false, ""},
+		{"empty", "", true, "must not be empty"},
+		{"rejects scheme", "https://registry.example.com/team", true, "should not include protocol scheme"},
+		{"rejects uppercase path", "registry.example.com/Team", true, "invalid namespace path"},
+		{"rejects empty path segment", "registry.example.com/team//sub", true, "invalid namespace path"},
+		{"rejects trailing empty path segment", "registry.example.com/team//", true, "invalid namespace path"},
+		{"rejects path with tag", "registry.example.com/team:1.0", true, "invalid namespace path"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateImageRegistryWithPath("test", tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateImageRegistryWithPath() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+				t.Errorf("ValidateImageRegistryWithPath() error = %v, want to contain %q", err, tt.wantErrContains)
+			}
+		})
+	}
+}
+
+func TestSplitRegistryPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantHost string
+		wantPath string
+	}{
+		{"host only", "registry.example.com", "registry.example.com", ""},
+		{"host and path", "registry.example.com/team/sub", "registry.example.com", "team/sub"},
+		{"host and path trailing slash", "registry.example.com/team/sub/", "registry.example.com", "team/sub"},
+		{"host with trailing slash only", "registry.example.com/", "registry.example.com", ""},
+		{"leading slash", "/team/sub", "", "team/sub"},
+		{"empty input", "", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, path := SplitRegistryPath(tt.input)
+			if host != tt.wantHost || path != tt.wantPath {
+				t.Fatalf("SplitRegistryPath(%q) = host=%q path=%q, want host=%q path=%q", tt.input, host, path, tt.wantHost, tt.wantPath)
+			}
+		})
+	}
+}

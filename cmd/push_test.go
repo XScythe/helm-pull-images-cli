@@ -13,6 +13,18 @@ func TestPushCmd_FlagsRegistered(t *testing.T) {
 	}
 }
 
+func TestPushCmd_FlagShorthands(t *testing.T) {
+	tests := map[string]string{
+		"input-dir":   "i",
+		"concurrency": "c",
+		"all":         "a",
+		"verbose":     "V",
+	}
+	for flagName, shorthand := range tests {
+		AssertFlagShorthand(t, pushCmd, flagName, shorthand)
+	}
+}
+
 func TestPushCmd_FlagsNotExposed(t *testing.T) {
 	flags := []string{"registry", "chart", "repo", "version", "output-dir"}
 	for _, flag := range flags {
@@ -59,8 +71,8 @@ func TestPushCmd_ValidateRegistryInvalid(t *testing.T) {
 	invalidRegistries := []string{
 		"https://example.com",
 		"http://registry.example.com",
-		"example.com/namespace",
-		"registry.example.com/path",
+		"registry.example.com/Team",
+		"registry.example.com/team//sub",
 	}
 	for _, registry := range invalidRegistries {
 		t.Run(registry, func(t *testing.T) {
@@ -77,7 +89,15 @@ func TestPushCmd_ValidateRegistryInvalid(t *testing.T) {
 }
 
 func TestPushCmd_ValidateRegistryValid(t *testing.T) {
-	validRegistries := []string{"docker.io", "registry.example.com", "registry.example.com:5000", "localhost:5000", "quay.io"}
+	validRegistries := []string{
+		"docker.io",
+		"registry.example.com",
+		"registry.example.com:5000",
+		"localhost:5000",
+		"quay.io",
+		"registry.example.com/team",
+		"localhost:5000/team/sub",
+	}
 	for _, registry := range validRegistries {
 		t.Run(registry, func(t *testing.T) {
 			capture, restore := spyPushRun(nil)
@@ -138,10 +158,13 @@ func TestPushCmd_FlagsMapToArgs(t *testing.T) {
 	}{
 		{"minimal", []string{"docker.io"}, "docker.io", "", 4, false},
 		{"with input-dir", []string{"docker.io", "--input-dir", "/tmp/images"}, "docker.io", "/tmp/images", 4, false},
+		{"with input-dir shorthand", []string{"docker.io", "-i", "/tmp/images"}, "docker.io", "/tmp/images", 4, false},
 		{"with concurrency", []string{"docker.io", "--concurrency", "8"}, "docker.io", "", 8, false},
+		{"with concurrency shorthand", []string{"docker.io", "-c", "8"}, "docker.io", "", 8, false},
+		{"with namespace path", []string{"registry.example.com:5000/team/sub"}, "registry.example.com:5000/team/sub", "", 4, false},
 		{
 			"all flags",
-			[]string{"registry.example.com:5000", "--input-dir", "/tmp/nginx-mirror", "--concurrency", "8", "--all", "--verbose"},
+			[]string{"registry.example.com:5000", "-i", "/tmp/nginx-mirror", "-c", "8", "-a", "-V"},
 			"registry.example.com:5000",
 			"/tmp/nginx-mirror",
 			8,

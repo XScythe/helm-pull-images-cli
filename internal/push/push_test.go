@@ -120,6 +120,53 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 	}
 }
 
+func TestPushImagesUsesRegistryNamespacePathAsDestinationPrefix(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
+	original := copyImageToRegistry
+	originalLoadLayout := loadOCILayout
+	originalResolveExec := resolveExecutablePath
+	defer func() {
+		copyImageToRegistry = original
+		loadOCILayout = originalLoadLayout
+		resolveExecutablePath = originalResolveExec
+	}()
+
+	var calledRegistry string
+	copyImageToRegistry = func(_ context.Context, registry string, _ layout.Path, _, _, _ string) error {
+		calledRegistry = registry
+		return nil
+	}
+	loadOCILayout = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+	resolveExecutablePath = func() (string, error) {
+		return "/unused/helper", nil
+	}
+
+	dir := t.TempDir()
+	manifest, err := pushspec.GeneratePushManifest([]pushspec.ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}})
+	if err != nil {
+		t.Fatalf("pushspec.GeneratePushManifest() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := pushImagesForTest(t, probeClient, Options{Registry: "registry.local:5000/team/sub", InputDir: dir, Concurrency: 1, All: true}); err != nil {
+		t.Fatalf("PushImages() error = %v", err)
+	}
+	if calledRegistry != "registry.local:5000/team/sub" {
+		t.Fatalf("copyImageToRegistry registry = %q, want %q", calledRegistry, "registry.local:5000/team/sub")
+	}
+}
+
 func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
 		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
@@ -540,6 +587,27 @@ func TestPushImagesAcceptsRegistryPreflightBeforeSelection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "requires terminal input and output") {
 		t.Fatalf("PushImages() error = %v, want terminal selection error", err)
+	}
+}
+
+func TestPushImagesPreflightUsesRegistryHostWithoutNamespacePath(t *testing.T) {
+	var probeURL string
+	probeClient := withRegistryProbeClient(t, func(req *http.Request) (*http.Response, error) {
+		probeURL = req.URL.String()
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
+	err := pushImagesForTest(t, probeClient, Options{
+		Registry:    "registry.local:5000/team/sub",
+		InputDir:    t.TempDir(),
+		Concurrency: 1,
+		All:         true,
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want push manifest read error")
+	}
+	if probeURL != "https://registry.local:5000/v2/" {
+		t.Fatalf("registry probe URL = %q, want %q", probeURL, "https://registry.local:5000/v2/")
 	}
 }
 

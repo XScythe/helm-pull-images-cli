@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"helm-deep-pack/internal/pushspec"
+	"helm-deep-pack/internal/validation"
 	"io"
 	"net/http"
 	"os"
@@ -59,9 +60,14 @@ func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
 }
 
 func pushImages(ctx context.Context, opts Options, probeClient *http.Client, status ...io.Writer) error {
-	if err := preflightRegistry(ctx, opts.Registry, probeClient); err != nil {
+	if err := validation.ValidateImageRegistryWithPath("registry argument", opts.Registry); err != nil {
+		return fmt.Errorf("validate registry argument: %w", err)
+	}
+	registryHost, _ := validation.SplitRegistryPath(opts.Registry)
+	if err := preflightRegistry(ctx, registryHost, probeClient); err != nil {
 		return fmt.Errorf("preflight registry argument: %w", err)
 	}
+	destRegistry := strings.TrimRight(opts.Registry, "/")
 
 	resolvedInputDir, err := resolvePushInputDir(opts.InputDir)
 	if err != nil {
@@ -92,7 +98,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 			return fmt.Errorf("interactive selection requires terminal input and output; re-run with --all to push every image non-interactively")
 		}
 
-		classified := classifyImages(ctx, opts.Registry, manifest.Images)
+		classified := classifyImages(ctx, destRegistry, manifest.Images)
 
 		// Print warnings for unknown items
 		for _, item := range classified {
@@ -104,7 +110,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 		}
 
 		var cancelled bool
-		selected, cancelled, err = runSelect(opts.In, opts.Out, classified, opts.Registry)
+		selected, cancelled, err = runSelect(opts.In, opts.Out, classified, destRegistry)
 		if err != nil {
 			return fmt.Errorf("select images: %w", err)
 		}
@@ -138,7 +144,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 		}
 	}
 
-	return pushSpecs(ctx, opts.Registry, layoutPath, selected, opts.Concurrency, status...)
+	return pushSpecs(ctx, destRegistry, layoutPath, selected, opts.Concurrency, status...)
 }
 
 func newRegistryProbeClient() *http.Client {

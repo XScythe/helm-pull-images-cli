@@ -82,12 +82,12 @@ var pullCmd = &cobra.Command{
 }
 
 func init() {
-	pullCmd.Flags().StringVar(&pullRepo, "repo", "", "Helm repository URL (https or oci:// by default; optional; if not provided, searches configured Helm repositories)")
-	pullCmd.Flags().StringVar(&pullVersion, "version", "", "Helm chart version")
-	pullCmd.Flags().StringVar(&pullOutputDir, "output-dir", "", "Directory for OCI layout artifacts and script")
-	pullCmd.Flags().IntVar(&pullConcurrency, "concurrency", 4, "Number of images to fetch and stage concurrently")
-	pullCmd.Flags().BoolVar(&pullAllowHTTP, "allow-insecure-http", false, "Allow plaintext HTTP for Helm repository URLs")
-	pullCmd.Flags().BoolVar(&pullVerbose, "verbose", false, "Enable verbose logging")
+	pullCmd.Flags().StringVarP(&pullRepo, "repo", "r", "", "Helm repository URL (https or oci:// by default; optional; if not provided, searches configured Helm repositories)")
+	pullCmd.Flags().StringVarP(&pullVersion, "version", "v", "", "Helm chart version")
+	pullCmd.Flags().StringVarP(&pullOutputDir, "output-dir", "o", "", "Directory for OCI layout artifacts and script")
+	pullCmd.Flags().IntVarP(&pullConcurrency, "concurrency", "c", 4, "Number of images to fetch and stage concurrently")
+	pullCmd.Flags().BoolVarP(&pullAllowHTTP, "allow-insecure-http", "k", false, "Allow plaintext HTTP for Helm repository URLs")
+	pullCmd.Flags().BoolVarP(&pullVerbose, "verbose", "V", false, "Enable verbose logging")
 }
 
 func isOCIReference(value string) bool {

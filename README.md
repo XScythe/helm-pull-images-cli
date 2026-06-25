@@ -81,12 +81,16 @@ helm-deep-pack pull oci://registry.example.com/charts/mychart --version 1.2.3
 helm-deep-pack push REGISTRY [--input-dir DIR] [--concurrency N] [--all]
 ```
 
+- `REGISTRY` accepts a host (`registry.internal:5000`) or host plus namespace path
+  (`registry.internal:5000/team/sub`). Images are pushed to `<REGISTRY>/<target>`.
+
 When run in a terminal, `push` is interactive by default so you can choose which images to mirror.
 
 Use `--all` for non-interactive environments (for example CI):
 
 ```bash
 helm-deep-pack push registry.internal:5000 --input-dir ./prometheus-node-exporter --all
+helm-deep-pack push registry.internal:5000/team --input-dir ./prometheus-node-exporter --all
 ```
 
 If `--input-dir` is omitted, `push` looks for `push_images.json` next to the running executable, then in the current working directory.

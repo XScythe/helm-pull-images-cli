@@ -24,7 +24,7 @@ var pushCmd = &cobra.Command{
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		pushRegistry = args[0]
 		// Validate all flags
-		if err := validation.ValidateImageRegistry("registry argument", pushRegistry); err != nil {
+		if err := validation.ValidateImageRegistryWithPath("registry argument", pushRegistry); err != nil {
 			return err
 		}
 		if err := validation.ValidateConcurrency("--concurrency", pushConcurrency); err != nil {
@@ -50,8 +50,8 @@ var pushCmd = &cobra.Command{
 }
 
 func init() {
-	pushCmd.Flags().StringVar(&pushInputDir, "input-dir", "", "Directory containing push_images.json and OCI layout artifacts")
-	pushCmd.Flags().IntVar(&pushConcurrency, "concurrency", 4, "Number of images to push concurrently")
-	pushCmd.Flags().BoolVar(&pushAll, "all", false, "Push all images without interactive selection")
-	pushCmd.Flags().BoolVar(&pushVerbose, "verbose", false, "Enable verbose logging")
+	pushCmd.Flags().StringVarP(&pushInputDir, "input-dir", "i", "", "Directory containing push_images.json and OCI layout artifacts")
+	pushCmd.Flags().IntVarP(&pushConcurrency, "concurrency", "c", 4, "Number of images to push concurrently")
+	pushCmd.Flags().BoolVarP(&pushAll, "all", "a", false, "Push all images without interactive selection")
+	pushCmd.Flags().BoolVarP(&pushVerbose, "verbose", "V", false, "Enable verbose logging")
 }

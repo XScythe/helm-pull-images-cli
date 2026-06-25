@@ -98,6 +98,17 @@ func AssertFlagType(t *testing.T, cmd *cobra.Command, flagName, expectedType str
 	}
 }
 
+func AssertFlagShorthand(t *testing.T, cmd *cobra.Command, flagName, expectedShorthand string) {
+	t.Helper()
+	flag := cmd.Flags().Lookup(flagName)
+	if flag == nil {
+		t.Fatalf("flag %q not found", flagName)
+	}
+	if flag.Shorthand != expectedShorthand {
+		t.Fatalf("flag %q: expected shorthand %q, got %q", flagName, expectedShorthand, flag.Shorthand)
+	}
+}
+
 func AssertFlagDefault(t *testing.T, cmd *cobra.Command, flagName, expectedDefault string) {
 	t.Helper()
 	flag := cmd.Flags().Lookup(flagName)

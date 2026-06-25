@@ -22,6 +22,20 @@ func TestPullCmd_FlagsRegistered(t *testing.T) {
 	}
 }
 
+func TestPullCmd_FlagShorthands(t *testing.T) {
+	tests := map[string]string{
+		"repo":                "r",
+		"version":             "v",
+		"output-dir":          "o",
+		"concurrency":         "c",
+		"allow-insecure-http": "k",
+		"verbose":             "V",
+	}
+	for flagName, shorthand := range tests {
+		AssertFlagShorthand(t, pullCmd, flagName, shorthand)
+	}
+}
+
 func TestPullCmd_FlagsNotExposed(t *testing.T) {
 	AssertFlagNotExists(t, pullCmd, "registry")
 }
@@ -66,7 +80,7 @@ func TestPullCmd_ChartFlagRequired(t *testing.T) {
 }
 
 func TestPullCmd_ValidateChartNameInvalid(t *testing.T) {
-	invalidNames := []string{"Chart_Name", "CHART", "-chart", "chart-", "chart@"}
+	invalidNames := []string{"Chart_Name", "CHART", "chart-", "chart@"}
 	for _, name := range invalidNames {
 		t.Run(name, func(t *testing.T) {
 			output := ExecuteCommand(pullCmd, []string{name})
@@ -77,6 +91,16 @@ func TestPullCmd_ValidateChartNameInvalid(t *testing.T) {
 				t.Fatalf("expected chart-related error for %q, got: %s", name, combinedErrorText(output))
 			}
 		})
+	}
+}
+
+func TestPullCmd_ValidateChartNameInvalidLeadingHyphenWithArgSeparator(t *testing.T) {
+	output := ExecuteCommand(pullCmd, []string{"--", "-chart"})
+	if output.Err == nil {
+		t.Fatal("expected error for invalid chart name starting with hyphen, got none")
+	}
+	if !strings.Contains(combinedErrorText(output), "chart") {
+		t.Fatalf("expected chart-related error, got: %s", combinedErrorText(output))
 	}
 }
 
@@ -243,8 +267,18 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 			want: pullpkg.Options{Chart: "nginx", Repo: "https://charts.example.com", Concurrency: 4},
 		},
 		{
+			name: "with repo shorthand",
+			args: []string{"nginx", "-r", "https://charts.example.com"},
+			want: pullpkg.Options{Chart: "nginx", Repo: "https://charts.example.com", Concurrency: 4},
+		},
+		{
 			name: "with version",
 			args: []string{"nginx", "--version", "1.0.0"},
+			want: pullpkg.Options{Chart: "nginx", Version: "1.0.0", Concurrency: 4},
+		},
+		{
+			name: "with version shorthand",
+			args: []string{"nginx", "-v", "1.0.0"},
 			want: pullpkg.Options{Chart: "nginx", Version: "1.0.0", Concurrency: 4},
 		},
 		{
@@ -253,19 +287,29 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 			want: pullpkg.Options{Chart: "nginx", OutputDir: "/tmp/output", Concurrency: 4},
 		},
 		{
+			name: "with output-dir shorthand",
+			args: []string{"nginx", "-o", "/tmp/output"},
+			want: pullpkg.Options{Chart: "nginx", OutputDir: "/tmp/output", Concurrency: 4},
+		},
+		{
 			name: "with concurrency",
 			args: []string{"nginx", "--concurrency", "8"},
+			want: pullpkg.Options{Chart: "nginx", Concurrency: 8},
+		},
+		{
+			name: "with concurrency shorthand",
+			args: []string{"nginx", "-c", "8"},
 			want: pullpkg.Options{Chart: "nginx", Concurrency: 8},
 		},
 		{
 			name: "all flags",
 			args: []string{
 				"nginx",
-				"--repo", "https://charts.bitnami.com/bitnami",
-				"--version", "14.0.0",
-				"--output-dir", "/tmp/nginx-mirror",
-				"--concurrency", "8",
-				"--verbose",
+				"-r", "https://charts.bitnami.com/bitnami",
+				"-v", "14.0.0",
+				"-o", "/tmp/nginx-mirror",
+				"-c", "8",
+				"-V",
 			},
 			want: pullpkg.Options{
 				Chart:       "nginx",
@@ -291,8 +335,8 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 			name: "oci repo split",
 			args: []string{
 				"nginx",
-				"--repo", "oci://localhost:5000/charts",
-				"--version", "14.0.0",
+				"-r", "oci://localhost:5000/charts",
+				"-v", "14.0.0",
 			},
 			want: pullpkg.Options{
 				Chart:       "nginx",

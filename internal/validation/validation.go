@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	containername "github.com/google/go-containerregistry/pkg/name"
 )
 
 // maxConcurrency derives sensible max concurrency from system specs.
@@ -133,6 +135,43 @@ func ValidateImageRegistry(name, value string) error {
 		if idx > 0 {
 			return fmt.Errorf("%s should not include path: %q", name, value)
 		}
+	}
+	return nil
+}
+
+// SplitRegistryPath separates a host-only registry value from an optional
+// namespace path. It trims trailing slashes and then splits on the first slash.
+func SplitRegistryPath(value string) (host, path string) {
+	clean := strings.TrimSuffix(value, "/")
+	parts := strings.SplitN(clean, "/", 2)
+	if len(parts) == 1 {
+		return parts[0], ""
+	}
+	return parts[0], parts[1]
+}
+
+// ValidateImageRegistryWithPath validates a registry argument that can include
+// an optional namespace path (host[/path]).
+func ValidateImageRegistryWithPath(name, value string) error {
+	if strings.Contains(value, "://") {
+		return fmt.Errorf("%s should not include protocol scheme: %q", name, value)
+	}
+
+	host, path := SplitRegistryPath(value)
+	if err := ValidateImageRegistry(name, host); err != nil {
+		return err
+	}
+	if path == "" {
+		return nil
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "" {
+			return fmt.Errorf("%s has an invalid namespace path %q: contains empty path segment", name, path)
+		}
+	}
+
+	if _, err := containername.NewRepository(host + "/" + path); err != nil {
+		return fmt.Errorf("%s has an invalid namespace path %q: %w", name, path, err)
 	}
 	return nil
 }
