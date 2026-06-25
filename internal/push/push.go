@@ -89,62 +89,73 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 	}
 
 	var selected []pushspec.ArchiveSpec
-
 	if opts.All {
 		selected = manifest.Images
 	} else {
-		// Interactive selection
-		if opts.In == nil || !isTerminalReader(opts.In) || opts.Out == nil || !isTerminalWriter(opts.Out) {
-			return fmt.Errorf("interactive selection requires terminal input and output; re-run with --all to push every image non-interactively")
+		chosen, proceed, selectErr := selectImagesToPush(ctx, opts, destRegistry, manifest.Images)
+		if selectErr != nil {
+			return selectErr
 		}
-
-		classified := classifyImages(ctx, destRegistry, manifest.Images)
-
-		// Print warnings for unknown items
-		for _, item := range classified {
-			if item.Status == statusUnknown && opts.Out != nil {
-				if _, err := fmt.Fprintf(opts.Out, "warning: could not check %s in registry: %v\n", item.Spec.Image, item.ProbeErr); err != nil {
-					return fmt.Errorf("write warning output: %w", err)
-				}
-			}
-		}
-
-		var cancelled bool
-		selected, cancelled, err = runSelect(opts.In, opts.Out, classified, destRegistry)
-		if err != nil {
-			return fmt.Errorf("select images: %w", err)
-		}
-		if cancelled {
+		if !proceed {
 			return nil
 		}
+		selected = chosen
+	}
 
-		if len(selected) == 0 {
-			if opts.Out != nil {
-				if _, err := fmt.Fprintln(opts.Out, "nothing selected; no images pushed"); err != nil {
-					return fmt.Errorf("write empty-selection output: %w", err)
-				}
-			}
-			return nil
-		}
+	return pushSpecs(ctx, destRegistry, layoutPath, selected, opts.Concurrency, status...)
+}
 
-		conflicts := selectedConflicts(selected, classified)
-		if len(conflicts) > 0 {
-			confirmed, confirmErr := confirmConflictSelection(opts.In, opts.Out, conflicts)
-			if confirmErr != nil {
-				return fmt.Errorf("confirm conflict selection: %w", confirmErr)
-			}
-			if !confirmed {
-				if opts.Out != nil {
-					if _, err := fmt.Fprintln(opts.Out, "push cancelled; no images pushed"); err != nil {
-						return fmt.Errorf("write cancellation output: %w", err)
-					}
-				}
-				return nil
+// selectImagesToPush runs the interactive selection workflow over specs: it
+// classifies each image against the destination registry, surfaces probe
+// warnings, prompts the user to choose images, and confirms any conflicting
+// overwrites. The returned proceed flag is false when the caller should stop
+// without pushing (terminal unavailable aside, this covers user cancellation,
+// an empty selection, or a declined conflict confirmation).
+func selectImagesToPush(ctx context.Context, opts Options, destRegistry string, specs []pushspec.ArchiveSpec) (selected []pushspec.ArchiveSpec, proceed bool, err error) {
+	if opts.In == nil || !isTerminalReader(opts.In) || opts.Out == nil || !isTerminalWriter(opts.Out) {
+		return nil, false, fmt.Errorf("interactive selection requires terminal input and output; re-run with --all to push every image non-interactively")
+	}
+
+	classified := classifyImages(ctx, destRegistry, specs)
+
+	for _, item := range classified {
+		if item.Status == statusUnknown {
+			if _, err := fmt.Fprintf(opts.Out, "warning: could not check %s in registry: %v\n", item.Spec.Image, item.ProbeErr); err != nil {
+				return nil, false, fmt.Errorf("write warning output: %w", err)
 			}
 		}
 	}
 
-	return pushSpecs(ctx, destRegistry, layoutPath, selected, opts.Concurrency, status...)
+	selected, cancelled, err := runSelect(opts.In, opts.Out, classified, destRegistry)
+	if err != nil {
+		return nil, false, fmt.Errorf("select images: %w", err)
+	}
+	if cancelled {
+		return nil, false, nil
+	}
+
+	if len(selected) == 0 {
+		if _, err := fmt.Fprintln(opts.Out, "nothing selected; no images pushed"); err != nil {
+			return nil, false, fmt.Errorf("write empty-selection output: %w", err)
+		}
+		return nil, false, nil
+	}
+
+	conflicts := selectedConflicts(selected, classified)
+	if len(conflicts) > 0 {
+		confirmed, confirmErr := confirmConflictSelection(opts.In, opts.Out, conflicts)
+		if confirmErr != nil {
+			return nil, false, fmt.Errorf("confirm conflict selection: %w", confirmErr)
+		}
+		if !confirmed {
+			if _, err := fmt.Fprintln(opts.Out, "push cancelled; no images pushed"); err != nil {
+				return nil, false, fmt.Errorf("write cancellation output: %w", err)
+			}
+			return nil, false, nil
+		}
+	}
+
+	return selected, true, nil
 }
 
 func newRegistryProbeClient() *http.Client {

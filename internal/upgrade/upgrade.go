@@ -556,20 +556,8 @@ func replaceExecutable(realPath, newPath string) (bool, error) {
 		}
 		return true, nil
 	}
-	oldPath := realPath + ".old"
-	_ = os.Remove(oldPath)
-	if err := os.Rename(realPath, oldPath); err != nil {
-		return false, fmt.Errorf("move current executable aside: %w", err)
-	}
-	if err := os.Rename(newPath, realPath); err != nil {
-		rollbackErr := os.Rename(oldPath, realPath)
-		if rollbackErr != nil {
-			return false, fmt.Errorf("replace executable: %w (rollback failed: %v)", err, rollbackErr)
-		}
-		return false, fmt.Errorf("replace executable: %w", err)
-	}
-	if err := os.Remove(oldPath); err != nil {
-		return false, nil
+	if err := performExecutableSwap(realPath, newPath); err != nil {
+		return false, err
 	}
 	return false, nil
 }
