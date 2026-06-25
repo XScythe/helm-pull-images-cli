@@ -185,6 +185,7 @@ func resetCmdVars(cmdName string) {
 		pushInputDir = ""
 		pushConcurrency = 4
 		pushAll = false
+		pushAllowHTTP = false
 		pushVerbose = false
 	case "upgrade":
 		upgradeTargetVersion = ""

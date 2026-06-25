@@ -7,7 +7,7 @@ import (
 )
 
 func TestPushCmd_FlagsRegistered(t *testing.T) {
-	flags := []string{"input-dir", "concurrency", "all", "verbose"}
+	flags := []string{"input-dir", "concurrency", "all", "allow-insecure-http", "verbose"}
 	for _, flag := range flags {
 		AssertFlagExists(t, pushCmd, flag)
 	}
@@ -15,10 +15,11 @@ func TestPushCmd_FlagsRegistered(t *testing.T) {
 
 func TestPushCmd_FlagShorthands(t *testing.T) {
 	tests := map[string]string{
-		"input-dir":   "i",
-		"concurrency": "c",
-		"all":         "a",
-		"verbose":     "V",
+		"input-dir":           "i",
+		"concurrency":         "c",
+		"all":                 "a",
+		"allow-insecure-http": "k",
+		"verbose":             "V",
 	}
 	for flagName, shorthand := range tests {
 		AssertFlagShorthand(t, pushCmd, flagName, shorthand)
@@ -34,10 +35,11 @@ func TestPushCmd_FlagsNotExposed(t *testing.T) {
 
 func TestPushCmd_FlagTypes(t *testing.T) {
 	tests := map[string]string{
-		"input-dir":   "string",
-		"concurrency": "int",
-		"all":         "bool",
-		"verbose":     "bool",
+		"input-dir":           "string",
+		"concurrency":         "int",
+		"all":                 "bool",
+		"allow-insecure-http": "bool",
+		"verbose":             "bool",
 	}
 	for flagName, expectedType := range tests {
 		AssertFlagType(t, pushCmd, flagName, expectedType)
@@ -46,10 +48,11 @@ func TestPushCmd_FlagTypes(t *testing.T) {
 
 func TestPushCmd_FlagDefaults(t *testing.T) {
 	tests := map[string]string{
-		"input-dir":   "",
-		"concurrency": "4",
-		"all":         "false",
-		"verbose":     "false",
+		"input-dir":           "",
+		"concurrency":         "4",
+		"all":                 "false",
+		"allow-insecure-http": "false",
+		"verbose":             "false",
 	}
 	for flagName, expectedDefault := range tests {
 		AssertFlagDefault(t, pushCmd, flagName, expectedDefault)
@@ -155,19 +158,23 @@ func TestPushCmd_FlagsMapToArgs(t *testing.T) {
 		wantInputDir    string
 		wantConcurrency int
 		wantAll         bool
+		wantAllowHTTP   bool
 	}{
-		{"minimal", []string{"docker.io"}, "docker.io", "", 4, false},
-		{"with input-dir", []string{"docker.io", "--input-dir", "/tmp/images"}, "docker.io", "/tmp/images", 4, false},
-		{"with input-dir shorthand", []string{"docker.io", "-i", "/tmp/images"}, "docker.io", "/tmp/images", 4, false},
-		{"with concurrency", []string{"docker.io", "--concurrency", "8"}, "docker.io", "", 8, false},
-		{"with concurrency shorthand", []string{"docker.io", "-c", "8"}, "docker.io", "", 8, false},
-		{"with namespace path", []string{"registry.example.com:5000/team/sub"}, "registry.example.com:5000/team/sub", "", 4, false},
+		{"minimal", []string{"docker.io"}, "docker.io", "", 4, false, false},
+		{"with input-dir", []string{"docker.io", "--input-dir", "/tmp/images"}, "docker.io", "/tmp/images", 4, false, false},
+		{"with input-dir shorthand", []string{"docker.io", "-i", "/tmp/images"}, "docker.io", "/tmp/images", 4, false, false},
+		{"with concurrency", []string{"docker.io", "--concurrency", "8"}, "docker.io", "", 8, false, false},
+		{"with concurrency shorthand", []string{"docker.io", "-c", "8"}, "docker.io", "", 8, false, false},
+		{"with allow insecure http", []string{"docker.io", "--allow-insecure-http"}, "docker.io", "", 4, false, true},
+		{"with allow insecure http shorthand", []string{"docker.io", "-k"}, "docker.io", "", 4, false, true},
+		{"with namespace path", []string{"registry.example.com:5000/team/sub"}, "registry.example.com:5000/team/sub", "", 4, false, false},
 		{
 			"all flags",
-			[]string{"registry.example.com:5000", "-i", "/tmp/nginx-mirror", "-c", "8", "-a", "-V"},
+			[]string{"registry.example.com:5000", "-i", "/tmp/nginx-mirror", "-c", "8", "-a", "-k", "-V"},
 			"registry.example.com:5000",
 			"/tmp/nginx-mirror",
 			8,
+			true,
 			true,
 		},
 	}
@@ -184,11 +191,11 @@ func TestPushCmd_FlagsMapToArgs(t *testing.T) {
 			if !capture.called {
 				t.Fatal("expected workflow to be invoked")
 			}
-			if capture.opts.Registry != tt.wantRegistry || capture.opts.InputDir != tt.wantInputDir || capture.opts.Concurrency != tt.wantConcurrency || capture.opts.All != tt.wantAll {
+			if capture.opts.Registry != tt.wantRegistry || capture.opts.InputDir != tt.wantInputDir || capture.opts.Concurrency != tt.wantConcurrency || capture.opts.All != tt.wantAll || capture.opts.AllowInsecureHTTP != tt.wantAllowHTTP {
 				t.Fatalf(
-					"args mismatch:\n got reg=%q dir=%q conc=%d all=%v\nwant reg=%q dir=%q conc=%d all=%v",
-					capture.opts.Registry, capture.opts.InputDir, capture.opts.Concurrency, capture.opts.All,
-					tt.wantRegistry, tt.wantInputDir, tt.wantConcurrency, tt.wantAll,
+					"args mismatch:\n got reg=%q dir=%q conc=%d all=%v allowHTTP=%v\nwant reg=%q dir=%q conc=%d all=%v allowHTTP=%v",
+					capture.opts.Registry, capture.opts.InputDir, capture.opts.Concurrency, capture.opts.All, capture.opts.AllowInsecureHTTP,
+					tt.wantRegistry, tt.wantInputDir, tt.wantConcurrency, tt.wantAll, tt.wantAllowHTTP,
 				)
 			}
 		})

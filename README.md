@@ -78,11 +78,12 @@ helm-deep-pack pull oci://registry.example.com/charts/mychart --version 1.2.3
 ## Push command
 
 ```bash
-helm-deep-pack push REGISTRY [--input-dir DIR] [--concurrency N] [--all]
+helm-deep-pack push REGISTRY [--input-dir DIR] [--concurrency N] [--all] [--allow-insecure-http]
 ```
 
 - `REGISTRY` accepts a host (`registry.internal:5000`) or host plus namespace path
   (`registry.internal:5000/team/sub`). Images are pushed to `<REGISTRY>/<target>`.
+- Registry connections use HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP registries (for example local test registries).
 
 When run in a terminal, `push` is interactive by default so you can choose which images to mirror.
 

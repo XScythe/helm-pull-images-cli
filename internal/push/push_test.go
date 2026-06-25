@@ -66,7 +66,7 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 	}()
 
 	var calls []string
-	copyImageToRegistry = func(_ context.Context, registry string, _ layout.Path, sourceImage, target, ociDigest string) error {
+	copyImageToRegistry = func(_ context.Context, registry string, _ bool, _ layout.Path, sourceImage, target, ociDigest string) error {
 		calls = append(calls, registry+"|"+sourceImage+"|"+target+"|"+ociDigest)
 		return nil
 	}
@@ -135,7 +135,7 @@ func TestPushImagesUsesRegistryNamespacePathAsDestinationPrefix(t *testing.T) {
 	}()
 
 	var calledRegistry string
-	copyImageToRegistry = func(_ context.Context, registry string, _ layout.Path, _, _, _ string) error {
+	copyImageToRegistry = func(_ context.Context, registry string, _ bool, _ layout.Path, _, _, _ string) error {
 		calledRegistry = registry
 		return nil
 	}
@@ -181,7 +181,7 @@ func TestPushImagesResolvesDefaultInputDir(t *testing.T) {
 		resolveExecutablePath = originalResolveExec
 	}()
 
-	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+	copyImageToRegistry = func(_ context.Context, _ string, _ bool, _ layout.Path, _, _, _ string) error {
 		return nil
 	}
 
@@ -237,7 +237,7 @@ func TestPushImagesFallsBackToWorkingDirWhenExecutableDirHasNoManifest(t *testin
 		resolveExecutablePath = originalResolveExec
 	}()
 
-	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+	copyImageToRegistry = func(_ context.Context, _ string, _ bool, _ layout.Path, _, _, _ string) error {
 		return nil
 	}
 
@@ -307,6 +307,7 @@ func TestCopyImageToRegistrySupportsDigestReferences(t *testing.T) {
 	if err := copyImageToRegistryUsingGoContainerRegistry(
 		context.Background(),
 		"registry.local:5000",
+		false,
 		layout.Path("/tmp/layout"),
 		"quay.io/example/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"example/api@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -341,6 +342,7 @@ func TestCopyImageToRegistryReportsWebsiteLikeRegistryErrors(t *testing.T) {
 	err := copyImageToRegistryUsingGoContainerRegistry(
 		context.Background(),
 		"example.com",
+		false,
 		layout.Path("/tmp/layout"),
 		"quay.io/example/api:v1",
 		"example/api:v1",
@@ -372,6 +374,7 @@ func TestCopyImageToRegistryPreservesRegistry404Errors(t *testing.T) {
 	err := copyImageToRegistryUsingGoContainerRegistry(
 		context.Background(),
 		"registry.local:5000",
+		false,
 		layout.Path("/tmp/layout"),
 		"quay.io/example/api:v1",
 		"example/api:v1",
@@ -402,7 +405,7 @@ func TestPushImagesReportsProgress(t *testing.T) {
 		resolveExecutablePath = originalResolveExec
 	}()
 
-	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+	copyImageToRegistry = func(_ context.Context, _ string, _ bool, _ layout.Path, _, _, _ string) error {
 		return nil
 	}
 	loadOCILayout = func(path string) (layout.Path, error) {
@@ -457,7 +460,7 @@ func TestPushImagesInteractiveRequiresTerminal(t *testing.T) {
 	}()
 
 	// Mock network operations so they don't run
-	copyImageToRegistry = func(_ context.Context, _ string, _ layout.Path, _, _, _ string) error {
+	copyImageToRegistry = func(_ context.Context, _ string, _ bool, _ layout.Path, _, _, _ string) error {
 		return nil
 	}
 	loadOCILayout = func(path string) (layout.Path, error) {
@@ -506,6 +509,7 @@ func TestPushImagesRejectsUnreachableRegistryBeforeSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen() error = %v", err)
 	}
+
 	registry := ln.Addr().String()
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -606,8 +610,86 @@ func TestPushImagesPreflightUsesRegistryHostWithoutNamespacePath(t *testing.T) {
 	if err == nil {
 		t.Fatal("PushImages() error = nil, want push manifest read error")
 	}
+
 	if probeURL != "https://registry.local:5000/v2/" {
 		t.Fatalf("registry probe URL = %q, want %q", probeURL, "https://registry.local:5000/v2/")
+	}
+}
+
+func TestCopyImageToRegistryAllowInsecureHTTPUsesHTTPReference(t *testing.T) {
+	originalLoad := loadLayoutImage
+	originalWrite := writeRemoteImage
+	defer func() {
+		loadLayoutImage = originalLoad
+		writeRemoteImage = originalWrite
+	}()
+
+	loadLayoutImage = func(_ layout.Path, _ v1.Hash) (v1.Image, error) {
+		return nil, nil
+	}
+
+	var gotScheme string
+	writeRemoteImage = func(ref name.Reference, _ v1.Image, _ ...remote.Option) error {
+		gotScheme = ref.Context().Registry.Scheme()
+		return nil
+	}
+
+	if err := copyImageToRegistryUsingGoContainerRegistry(
+		context.Background(),
+		"registry.local:5000",
+		true,
+		layout.Path("/tmp/layout"),
+		"quay.io/example/api:v1",
+		"example/api:v1",
+		"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	); err != nil {
+		t.Fatalf("copyImageToRegistryUsingGoContainerRegistry() error = %v", err)
+	}
+	if gotScheme != "http" {
+		t.Fatalf("destination reference scheme = %q, want %q", gotScheme, "http")
+	}
+}
+
+func TestPushImagesSuggestsAllowInsecureHTTPFlagForHTTPRegistry(t *testing.T) {
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("Get \"https://registry.local:5000/v2/\": http: server gave HTTP response to HTTPS client")
+	})
+
+	err := pushImagesForTest(t, probeClient, Options{
+		Registry:    "registry.local:5000",
+		InputDir:    t.TempDir(),
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+		Out:         &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want insecure-http hint error")
+	}
+	if !strings.Contains(err.Error(), "--allow-insecure-http") {
+		t.Fatalf("PushImages() error = %v, want --allow-insecure-http hint", err)
+	}
+}
+
+func TestPushImagesAllowInsecureHTTPUsesHTTPPreflightProbe(t *testing.T) {
+	var probeURL string
+	probeClient := withRegistryProbeClient(t, func(req *http.Request) (*http.Response, error) {
+		probeURL = req.URL.String()
+		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
+	})
+
+	err := pushImagesForTest(t, probeClient, Options{
+		Registry:          "registry.local:5000/team/sub",
+		AllowInsecureHTTP: true,
+		InputDir:          t.TempDir(),
+		Concurrency:       1,
+		All:               true,
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want push manifest read error")
+	}
+	if probeURL != "http://registry.local:5000/v2/" {
+		t.Fatalf("registry probe URL = %q, want %q", probeURL, "http://registry.local:5000/v2/")
 	}
 }
 

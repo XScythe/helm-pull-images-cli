@@ -12,6 +12,7 @@ var (
 	pushInputDir    string
 	pushConcurrency int
 	pushAll         bool
+	pushAllowHTTP   bool
 	pushVerbose     bool
 )
 
@@ -39,12 +40,13 @@ var pushCmd = &cobra.Command{
 		)
 
 		return pushRun(cmd.Context(), push.Options{
-			Registry:    pushRegistry,
-			InputDir:    pushInputDir,
-			Concurrency: pushConcurrency,
-			All:         pushAll,
-			In:          cmd.InOrStdin(),
-			Out:         cmd.OutOrStdout(),
+			Registry:          pushRegistry,
+			InputDir:          pushInputDir,
+			Concurrency:       pushConcurrency,
+			All:               pushAll,
+			AllowInsecureHTTP: pushAllowHTTP,
+			In:                cmd.InOrStdin(),
+			Out:               cmd.OutOrStdout(),
 		}, cmd.ErrOrStderr())
 	},
 }
@@ -53,5 +55,6 @@ func init() {
 	pushCmd.Flags().StringVarP(&pushInputDir, "input-dir", "i", "", "Directory containing push_images.json and OCI layout artifacts")
 	pushCmd.Flags().IntVarP(&pushConcurrency, "concurrency", "c", 4, "Number of images to push concurrently")
 	pushCmd.Flags().BoolVarP(&pushAll, "all", "a", false, "Push all images without interactive selection")
+	pushCmd.Flags().BoolVarP(&pushAllowHTTP, "allow-insecure-http", "k", false, "Allow plaintext HTTP for registry probes and pushes")
 	pushCmd.Flags().BoolVarP(&pushVerbose, "verbose", "V", false, "Enable verbose logging")
 }

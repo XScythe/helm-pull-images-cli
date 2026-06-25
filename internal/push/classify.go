@@ -32,8 +32,12 @@ type classifiedImage struct {
 
 type remoteHeadFn func(name.Reference, ...remote.Option) (*v1.Descriptor, error)
 
-func classifyOne(ctx context.Context, registry string, spec pushspec.ArchiveSpec, headFn remoteHeadFn) classifiedImage {
-	ref, err := name.ParseReference(strings.TrimRight(registry, "/") + "/" + spec.Target)
+func classifyOne(ctx context.Context, registry string, allowInsecureHTTP bool, spec pushspec.ArchiveSpec, headFn remoteHeadFn) classifiedImage {
+	refOpts := make([]name.Option, 0, 1)
+	if allowInsecureHTTP {
+		refOpts = append(refOpts, name.Insecure)
+	}
+	ref, err := name.ParseReference(strings.TrimRight(registry, "/")+"/"+spec.Target, refOpts...)
 	if err != nil {
 		return classifiedImage{
 			Spec:     spec,
@@ -73,14 +77,14 @@ func classifyOne(ctx context.Context, registry string, spec pushspec.ArchiveSpec
 	}
 }
 
-func classifyImages(ctx context.Context, registry string, specs []pushspec.ArchiveSpec) []classifiedImage {
-	return classifyImagesWithHead(ctx, registry, specs, remote.Head)
+func classifyImages(ctx context.Context, registry string, allowInsecureHTTP bool, specs []pushspec.ArchiveSpec) []classifiedImage {
+	return classifyImagesWithHead(ctx, registry, allowInsecureHTTP, specs, remote.Head)
 }
 
-func classifyImagesWithHead(ctx context.Context, registry string, specs []pushspec.ArchiveSpec, headFn remoteHeadFn) []classifiedImage {
+func classifyImagesWithHead(ctx context.Context, registry string, allowInsecureHTTP bool, specs []pushspec.ArchiveSpec, headFn remoteHeadFn) []classifiedImage {
 	result := make([]classifiedImage, len(specs))
 	for i, spec := range specs {
-		result[i] = classifyOne(ctx, registry, spec, headFn)
+		result[i] = classifyOne(ctx, registry, allowInsecureHTTP, spec, headFn)
 	}
 	return result
 }

@@ -13,6 +13,7 @@ import (
 	"helm-deep-pack/internal/validation"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,12 +36,13 @@ var loadOCILayout = layout.FromPath
 var resolveExecutablePath = os.Executable
 
 type Options struct {
-	Registry    string
-	InputDir    string
-	Concurrency int
-	All         bool
-	In          io.Reader
-	Out         io.Writer
+	Registry          string
+	InputDir          string
+	Concurrency       int
+	All               bool
+	AllowInsecureHTTP bool
+	In                io.Reader
+	Out               io.Writer
 }
 
 func isTerminalReader(r io.Reader) bool {
@@ -64,7 +66,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 		return fmt.Errorf("validate registry argument: %w", err)
 	}
 	registryHost, _ := validation.SplitRegistryPath(opts.Registry)
-	if err := preflightRegistry(ctx, registryHost, probeClient); err != nil {
+	if err := preflightRegistry(ctx, registryHost, opts.AllowInsecureHTTP, probeClient); err != nil {
 		return fmt.Errorf("preflight registry argument: %w", err)
 	}
 	destRegistry := strings.TrimRight(opts.Registry, "/")
@@ -102,7 +104,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 		selected = chosen
 	}
 
-	return pushSpecs(ctx, destRegistry, layoutPath, selected, opts.Concurrency, status...)
+	return pushSpecs(ctx, destRegistry, layoutPath, selected, opts.Concurrency, opts.AllowInsecureHTTP, status...)
 }
 
 // selectImagesToPush runs the interactive selection workflow over specs: it
@@ -116,7 +118,7 @@ func selectImagesToPush(ctx context.Context, opts Options, destRegistry string, 
 		return nil, false, fmt.Errorf("interactive selection requires terminal input and output; re-run with --all to push every image non-interactively")
 	}
 
-	classified := classifyImages(ctx, destRegistry, specs)
+	classified := classifyImages(ctx, destRegistry, opts.AllowInsecureHTTP, specs)
 
 	for _, item := range classified {
 		if item.Status == statusUnknown {
@@ -162,10 +164,14 @@ func newRegistryProbeClient() *http.Client {
 	return &http.Client{Timeout: 5 * time.Second}
 }
 
-func preflightRegistry(ctx context.Context, registry string, probeClient *http.Client) (err error) {
+func preflightRegistry(ctx context.Context, registry string, allowInsecureHTTP bool, probeClient *http.Client) (err error) {
 	registry = strings.TrimRight(registry, "/")
+	scheme := "https"
+	if allowInsecureHTTP {
+		scheme = "http"
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+registry+"/v2/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+registry+"/v2/", nil)
 	if err != nil {
 		return fmt.Errorf("build registry probe request: %w", err)
 	}
@@ -174,6 +180,12 @@ func preflightRegistry(ctx context.Context, registry string, probeClient *http.C
 	}
 	resp, err := probeClient.Do(req)
 	if err != nil {
+		if !allowInsecureHTTP && isHTTPServerOnHTTPSProbe(err) {
+			return fmt.Errorf(
+				"registry %q appears to serve plain HTTP, but push defaults to HTTPS; re-run with --allow-insecure-http for HTTP registries",
+				registry,
+			)
+		}
 		return fmt.Errorf("registry %q is not reachable: %w", registry, err)
 	}
 	defer func() {
@@ -207,7 +219,7 @@ func looksLikeWebsiteContent(contentType string, body []byte) bool {
 	return strings.Contains(lowerBody, "<!doctype html") || strings.Contains(lowerBody, "<html")
 }
 
-func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, specs []pushspec.ArchiveSpec, concurrency int, status ...io.Writer) error {
+func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, specs []pushspec.ArchiveSpec, concurrency int, allowInsecureHTTP bool, status ...io.Writer) error {
 	progress := newTransferProgress(statusWriter(status...), "pushing", len(specs))
 	defer progress.Finish()
 
@@ -219,7 +231,7 @@ func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, spe
 			progress.Begin(spec.Image)
 			defer progress.End(spec.Image)
 
-			if err := copyImageToRegistry(groupCtx, registry, layoutPath, spec.Image, spec.Target, spec.OCIDigest); err != nil {
+			if err := copyImageToRegistry(groupCtx, registry, allowInsecureHTTP, layoutPath, spec.Image, spec.Target, spec.OCIDigest); err != nil {
 				return fmt.Errorf("push %s: %w", spec.Image, err)
 			}
 			return nil
@@ -391,7 +403,7 @@ func confirmConflictSelection(in io.Reader, out io.Writer, conflicts []classifie
 	}
 }
 
-func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry string, layoutPath layout.Path, sourceImage, target, ociDigest string) error {
+func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry string, allowInsecureHTTP bool, layoutPath layout.Path, sourceImage, target, ociDigest string) error {
 	if _, err := name.ParseReference(sourceImage); err != nil {
 		return fmt.Errorf("parse source image %q: %w", sourceImage, err)
 	}
@@ -408,7 +420,11 @@ func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry s
 		return fmt.Errorf("load image %q from oci layout: %w", sourceImage, err)
 	}
 
-	destRef, err := name.ParseReference(fmt.Sprintf("%s/%s", registry, target))
+	destRefOpts := make([]name.Option, 0, 1)
+	if allowInsecureHTTP {
+		destRefOpts = append(destRefOpts, name.Insecure)
+	}
+	destRef, err := name.ParseReference(fmt.Sprintf("%s/%s", registry, target), destRefOpts...)
 	if err != nil {
 		return fmt.Errorf("parse destination reference %q: %w", registry+"/"+target, err)
 	}
@@ -421,6 +437,14 @@ func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry s
 	}
 
 	return nil
+}
+
+func isHTTPServerOnHTTPSProbe(err error) bool {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return strings.Contains(strings.ToLower(urlErr.Err.Error()), "server gave http response to https client")
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "server gave http response to https client")
 }
 
 func looksLikeWebsite(err error) bool {

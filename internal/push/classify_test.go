@@ -80,7 +80,7 @@ func TestClassifyImagesMirrored(t *testing.T) {
 		},
 	}
 
-	result := classifyImagesWithHead(context.Background(), "registry.local:5000", specs, headFn)
+	result := classifyImagesWithHead(context.Background(), "registry.local:5000", false, specs, headFn)
 
 	if len(result) != 1 {
 		t.Fatalf("classifyImages() returned %d images, want 1", len(result))
@@ -117,7 +117,7 @@ func TestClassifyImagesConflict(t *testing.T) {
 		},
 	}
 
-	result := classifyImagesWithHead(context.Background(), "registry.local:5000", specs, headFn)
+	result := classifyImagesWithHead(context.Background(), "registry.local:5000", false, specs, headFn)
 
 	if len(result) != 1 {
 		t.Fatalf("classifyImages() returned %d images, want 1", len(result))
@@ -147,7 +147,7 @@ func TestClassifyImagesPushable(t *testing.T) {
 		},
 	}
 
-	result := classifyImagesWithHead(context.Background(), "registry.local:5000", specs, headFn)
+	result := classifyImagesWithHead(context.Background(), "registry.local:5000", false, specs, headFn)
 
 	if len(result) != 1 {
 		t.Fatalf("classifyImages() returned %d images, want 1", len(result))
@@ -181,7 +181,7 @@ func TestClassifyImagesUnknown(t *testing.T) {
 		},
 	}
 
-	result := classifyImagesWithHead(context.Background(), "registry.local:5000", specs, headFn)
+	result := classifyImagesWithHead(context.Background(), "registry.local:5000", false, specs, headFn)
 
 	if len(result) != 1 {
 		t.Fatalf("classifyImages() returned %d images, want 1", len(result))
@@ -197,5 +197,30 @@ func TestClassifyImagesUnknown(t *testing.T) {
 
 	if result[0].ProbeErr == nil {
 		t.Fatalf("ProbeErr = nil, want non-nil error")
+	}
+}
+
+func TestClassifyImagesAllowInsecureHTTPUsesHTTPReference(t *testing.T) {
+	specDigest := "sha256:" + strings.Repeat("a", 64)
+	var gotScheme string
+	headFn := func(ref name.Reference, opts ...remote.Option) (*v1.Descriptor, error) {
+		gotScheme = ref.Context().Registry.Scheme()
+		return nil, fmt.Errorf("manifest unknown: manifest_unknown")
+	}
+
+	specs := []pushspec.ArchiveSpec{
+		{
+			Image:     "quay.io/example/api:v1",
+			Target:    "example/api:v1",
+			OCIDigest: specDigest,
+		},
+	}
+
+	result := classifyImagesWithHead(context.Background(), "registry.local:5000", true, specs, headFn)
+	if len(result) != 1 {
+		t.Fatalf("classifyImages() returned %d images, want 1", len(result))
+	}
+	if gotScheme != "http" {
+		t.Fatalf("registry scheme = %q, want %q", gotScheme, "http")
 	}
 }
