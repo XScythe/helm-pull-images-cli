@@ -22,6 +22,7 @@ import (
 
 	"helm-deep-pack/internal/chartimages"
 	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/pushbin"
 	"helm-deep-pack/internal/pushspec"
 )
 
@@ -65,7 +66,7 @@ type Runner struct {
 	archiveImages      func(ctx context.Context, images []string, outputDir string, concurrency int, status ...io.Writer) ([]pushspec.ArchiveSpec, error)
 	writePushManifest  func(outputDir string, specs []pushspec.ArchiveSpec) error
 	stageChartArchive  func(loaded loadedChart, outputDir string) (string, error)
-	copySelfExecutable func(outputDir string) (string, error)
+	stagePushBinary    func(outputDir string) (string, error)
 	localChartSource   chartSourceAdapter
 	helmChartSource    chartSourceAdapter
 	ociChartSource     chartSourceAdapter
@@ -87,12 +88,12 @@ func NewRunner() Runner {
 		renderManifest: func(r Runner, ctx context.Context, opts Options) (string, error) {
 			return r.renderChartManifest(ctx, opts)
 		},
-		extractImages:      chartimages.ExtractImages,
-		archiveImages:      push.ArchiveImages,
-		writePushManifest:  pushspec.WritePushManifest,
-		stageChartArchive:  stageChartArchive,
-		copySelfExecutable: push.CopySelfExecutable,
-		chartCache:         &loadedCharts{byOpts: make(map[string]*loadedChart)},
+		extractImages:     chartimages.ExtractImages,
+		archiveImages:     push.ArchiveImages,
+		writePushManifest: pushspec.WritePushManifest,
+		stageChartArchive: stageChartArchive,
+		stagePushBinary:   pushbin.Stage,
+		chartCache:        &loadedCharts{byOpts: make(map[string]*loadedChart)},
 	}
 	r.extractChartImages = func(ctx context.Context, opts Options) ([]string, error) {
 		return r.extractChartAnnotationImages(ctx, opts)

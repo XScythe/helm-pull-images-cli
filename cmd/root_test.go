@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -123,5 +124,67 @@ func TestRootCmd_VersionFlag(t *testing.T) {
 	combined := output.Stdout + output.Stderr
 	if !strings.Contains(combined, "helm-deep-pack") {
 		t.Fatalf("expected version output to include binary name, got: %s", combined)
+	}
+}
+
+func TestIsPushHelperInvocation(t *testing.T) {
+	tests := []struct {
+		name  string
+		argv0 string
+		want  bool
+	}{
+		{name: "exact name", argv0: "push_images", want: true},
+		{name: "with path", argv0: "/tmp/work/push_images", want: true},
+		{name: "with windows extension", argv0: `C:\tmp\push_images.exe`, want: true},
+		{name: "normal binary", argv0: "helm-deep-pack", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPushHelperInvocation(tc.argv0); got != tc.want {
+				t.Fatalf("isPushHelperInvocation(%q) = %v, want %v", tc.argv0, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunPushHelperIfNeeded_InvokesPushWorkflow(t *testing.T) {
+	capture, restore := spyPushRun(nil)
+	defer restore()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	handled, err := runPushHelperIfNeeded([]string{"push_images", "docker.io", "-a"}, strings.NewReader(""), stdout, stderr)
+	if err != nil {
+		t.Fatalf("runPushHelperIfNeeded() error = %v", err)
+	}
+	if !handled {
+		t.Fatalf("runPushHelperIfNeeded() handled = false, want true")
+	}
+	if !capture.called {
+		t.Fatalf("expected push workflow to be called")
+	}
+	if capture.opts.Registry != "docker.io" || !capture.opts.All {
+		t.Fatalf("unexpected options: %#v", capture.opts)
+	}
+}
+
+func TestRunPushHelperIfNeeded_AcceptsLegacyPushSubcommand(t *testing.T) {
+	capture, restore := spyPushRun(nil)
+	defer restore()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	handled, err := runPushHelperIfNeeded([]string{"push_images", "push", "docker.io", "--all"}, strings.NewReader(""), stdout, stderr)
+	if err != nil {
+		t.Fatalf("runPushHelperIfNeeded() error = %v", err)
+	}
+	if !handled {
+		t.Fatalf("runPushHelperIfNeeded() handled = false, want true")
+	}
+	if !capture.called {
+		t.Fatalf("expected push workflow to be called")
+	}
+	if capture.opts.Registry != "docker.io" || !capture.opts.All {
+		t.Fatalf("unexpected options: %#v", capture.opts)
 	}
 }

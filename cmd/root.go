@@ -1,9 +1,15 @@
 package cmd
 
 import (
+	"context"
+	"helm-deep-pack/internal/push"
+	"helm-deep-pack/internal/pushcli"
 	"helm-deep-pack/internal/upgrade"
+	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -30,7 +36,14 @@ var rootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	upgrade.CleanupStale()
-	err := rootCmd.Execute()
+	handled, err := runPushHelperIfNeeded(os.Args, os.Stdin, os.Stdout, os.Stderr)
+	if err != nil {
+		os.Exit(1)
+	}
+	if handled {
+		return
+	}
+	err = rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
 	}
@@ -49,4 +62,45 @@ func init() {
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(upgradeHelperCmd)
+}
+
+func runPushHelperIfNeeded(args []string, in io.Reader, out, errOut io.Writer) (bool, error) {
+	if len(args) == 0 || !isPushHelperInvocation(args[0]) {
+		return false, nil
+	}
+	helperArgs := args[1:]
+	if len(helperArgs) > 0 && strings.EqualFold(helperArgs[0], "push") {
+		helperArgs = helperArgs[1:]
+	}
+
+	cmd := pushcli.NewCommand(pushcli.Config{
+		Use:   "push_images REGISTRY",
+		Short: "Push mirrored images from generated OCI layout artifacts",
+		Run: func(ctx context.Context, opts push.Options, status ...io.Writer) error {
+			return pushRun(ctx, opts, status...)
+		},
+		LoggerFactory: commandLogger,
+		State: &pushcli.State{
+			Concurrency: 4,
+		},
+	})
+	cmd.SilenceUsage = true
+	cmd.SetIn(in)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs(helperArgs)
+	if err := cmd.Execute(); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func isPushHelperInvocation(argv0 string) bool {
+	normalizedArgv0 := strings.ReplaceAll(argv0, "\\", "/")
+	base := strings.ToLower(filepath.Base(normalizedArgv0))
+	expected := strings.ToLower(push.PushBinaryName())
+	if base == expected {
+		return true
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base)) == strings.TrimSuffix(expected, filepath.Ext(expected))
 }

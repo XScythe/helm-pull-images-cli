@@ -181,12 +181,12 @@ func resetCmdVars(cmdName string) {
 		pullConcurrency = 4
 		pullVerbose = false
 	case "push":
-		pushRegistry = ""
-		pushInputDir = ""
-		pushConcurrency = 4
-		pushAll = false
-		pushAllowHTTP = false
-		pushVerbose = false
+		pushState.Registry = ""
+		pushState.InputDir = ""
+		pushState.Concurrency = 4
+		pushState.All = false
+		pushState.AllowHTTP = false
+		pushState.Verbose = false
 	case "upgrade":
 		upgradeTargetVersion = ""
 		upgradeForce = false

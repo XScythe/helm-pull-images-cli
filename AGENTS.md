@@ -144,6 +144,9 @@ output := ExecuteCommand(pushCmd, []string{"docker.io", "--concurrency", "4"})
   output directory.
 - `push` reads `push_images.json` from `--input-dir` (or the helper binary directory
   by default), then pushes images with bounded concurrency.
+- Pull artifacts include a staged helper executable named `push_images` that can be
+  run directly as `./push_images REGISTRY` (no `push` subcommand) from inside the
+  output directory.
 - The on-disk contract (`push_images.json`, OCI layout) lives in `internal/pushspec/`
   and is shared by both phases.
 - Temporary output is written to the current working directory unless an explicit

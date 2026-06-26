@@ -1,60 +1,27 @@
 package cmd
 
 import (
-	"github.com/spf13/cobra"
+	"context"
+	"io"
 
 	"helm-deep-pack/internal/push"
-	"helm-deep-pack/internal/validation"
+	"helm-deep-pack/internal/pushcli"
 )
 
 var (
-	pushRegistry    string
-	pushInputDir    string
-	pushConcurrency int
-	pushAll         bool
-	pushAllowHTTP   bool
-	pushVerbose     bool
+	pushState = pushcli.State{
+		Concurrency: 4,
+	}
 )
 
 var pushRun = push.PushImages
 
-var pushCmd = &cobra.Command{
+var pushCmd = pushcli.NewCommand(pushcli.Config{
 	Use:   "push REGISTRY",
 	Short: "Push mirrored images from generated OCI layout artifacts",
-	Args:  cobra.ExactArgs(1),
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		pushRegistry = args[0]
-		// Validate all flags
-		if err := validation.ValidateImageRegistryWithPath("registry argument", pushRegistry); err != nil {
-			return err
-		}
-		if err := validation.ValidateConcurrency("--concurrency", pushConcurrency); err != nil {
-			return err
-		}
-		return nil
+	Run: func(ctx context.Context, opts push.Options, status ...io.Writer) error {
+		return pushRun(ctx, opts, status...)
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
-		commandLogger(pushVerbose).Debug("pushing images to registry",
-			"registry", pushRegistry,
-			"concurrency", pushConcurrency,
-		)
-
-		return pushRun(cmd.Context(), push.Options{
-			Registry:          pushRegistry,
-			InputDir:          pushInputDir,
-			Concurrency:       pushConcurrency,
-			All:               pushAll,
-			AllowInsecureHTTP: pushAllowHTTP,
-			In:                cmd.InOrStdin(),
-			Out:               cmd.OutOrStdout(),
-		}, cmd.ErrOrStderr())
-	},
-}
-
-func init() {
-	pushCmd.Flags().StringVarP(&pushInputDir, "input-dir", "i", "", "Directory containing push_images.json and OCI layout artifacts")
-	pushCmd.Flags().IntVarP(&pushConcurrency, "concurrency", "c", 4, "Number of images to push concurrently")
-	pushCmd.Flags().BoolVarP(&pushAll, "all", "a", false, "Push all images without interactive selection")
-	pushCmd.Flags().BoolVarP(&pushAllowHTTP, "allow-insecure-http", "k", false, "Allow plaintext HTTP for registry probes and pushes")
-	pushCmd.Flags().BoolVarP(&pushVerbose, "verbose", "V", false, "Enable verbose logging")
-}
+	LoggerFactory: commandLogger,
+	State:         &pushState,
+})

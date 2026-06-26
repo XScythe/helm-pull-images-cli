@@ -90,8 +90,8 @@ func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) 
 		return PullResult{}, fmt.Errorf("stage chart archive: %w", err)
 	}
 
-	if _, err := r.copySelfExecutable(outputDir); err != nil {
-		return PullResult{}, fmt.Errorf("copy self executable: %w", err)
+	if _, err := r.stagePushBinary(outputDir); err != nil {
+		return PullResult{}, fmt.Errorf("stage push binary: %w", err)
 	}
 
 	result = PullResult{

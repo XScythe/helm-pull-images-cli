@@ -10,6 +10,9 @@ builds:
   - id: helm-deep-pack
     main: .
     binary: helm-deep-pack
+    hooks:
+      pre:
+        - GOOS={{ .Os }} GOARCH={{ .Arch }} VERSION={{ .Version }} ./scripts/build-push-embed.sh
     env:
       - CGO_ENABLED=0
     flags:
@@ -17,6 +20,23 @@ builds:
     ldflags:
       - -s -w
       - -X helm-deep-pack/cmd.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+  - id: push-images
+    main: ./cmd/pushimages
+    binary: push_images
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X helm-deep-pack/cmd/pushimages.version={{ .Version }}
     goos:
       - linux
       - darwin
