@@ -179,6 +179,8 @@ func resetCmdVars(cmdName string) {
 		pullVersion = ""
 		pullOutputDir = ""
 		pullConcurrency = 4
+		pullValuesFiles = nil
+		pullSetValues = nil
 		pullVerbose = false
 	case "push":
 		pushState.Registry = ""

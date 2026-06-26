@@ -596,6 +596,208 @@ spec:
 	}
 }
 
+func TestRenderChartManifestAppliesValuesFiles(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "values.yaml"), []byte(`image:
+  tag: v1
+sidecar:
+  enabled: false
+  tag: v1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: quay.io/example/app:{{ .Values.image.tag }}
+        {{- if .Values.sidecar.enabled }}
+        - name: sidecar
+          image: quay.io/example/sidecar:{{ .Values.sidecar.tag }}
+        {{- end }}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	valuesFile := filepath.Join(h.cwd, "override-values.yaml")
+	if err := os.WriteFile(valuesFile, []byte(`sidecar:
+  enabled: true
+  tag: v9
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{valuesFile},
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "quay.io/example/sidecar:v9") {
+		t.Fatalf("renderChartManifest() = %q, want sidecar image from values file", got)
+	}
+}
+
+func TestRenderChartManifestAppliesValuesFilesInOrder(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "values.yaml"), []byte(`image:
+  tag: v1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: quay.io/example/app:{{ .Values.image.tag }}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	fileA := filepath.Join(h.cwd, "values-a.yaml")
+	if err := os.WriteFile(fileA, []byte("image:\n  tag: v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	fileB := filepath.Join(h.cwd, "values-b.yaml")
+	if err := os.WriteFile(fileB, []byte("image:\n  tag: v3\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{fileA, fileB},
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "quay.io/example/app:v3") {
+		t.Fatalf("renderChartManifest() = %q, want image tag from last values file", got)
+	}
+}
+
+func TestRenderChartManifestSetOverridesValuesFile(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "values.yaml"), []byte(`image:
+  tag: v1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: quay.io/example/app:{{ .Values.image.tag }}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	valuesFile := filepath.Join(h.cwd, "override-values.yaml")
+	if err := os.WriteFile(valuesFile, []byte("image:\n  tag: v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := h.runner.renderChartManifest(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{valuesFile},
+		SetValues:   []string{"image.tag=v4"},
+	})
+	if err != nil {
+		t.Fatalf("renderChartManifest() error = %v", err)
+	}
+	if !strings.Contains(got, "quay.io/example/app:v4") {
+		t.Fatalf("renderChartManifest() = %q, want --set override to win", got)
+	}
+}
+
+func TestRenderChartManifestValuesInputErrorsAreAttributed(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(filepath.Join(chartDir, "templates"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: example
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "templates", "deployment.yaml"), []byte(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := h.runner.renderChartManifest(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{filepath.Join(h.cwd, "missing-values.yaml")},
+	})
+	if err == nil {
+		t.Fatal("renderChartManifest() error = nil, want missing values file error")
+	}
+	if !strings.Contains(err.Error(), "read values file") {
+		t.Fatalf("renderChartManifest() error = %v, want values file attribution", err)
+	}
+
+	_, err = h.runner.renderChartManifest(context.Background(), Options{
+		Chart:     "chart",
+		SetValues: []string{"image.tag"},
+	})
+	if err == nil {
+		t.Fatal("renderChartManifest() error = nil, want invalid --set parse error")
+	}
+	if !strings.Contains(err.Error(), "parse --set") {
+		t.Fatalf("renderChartManifest() error = %v, want --set attribution", err)
+	}
+}
+
 func TestLoadChartUsesCachedChartForSameOptions(t *testing.T) {
 	h := newRunnerTestHarness(t)
 	chartDir := filepath.Join(h.cwd, "chart")
@@ -620,6 +822,38 @@ version: 0.1.0
 
 	if _, err := h.runner.loadChart(context.Background(), opts); err != nil {
 		t.Fatalf("loadChart() second call error = %v, want cached chart", err)
+	}
+}
+
+func TestLoadChartCacheKeyIncludesValuesOverrides(t *testing.T) {
+	h := newRunnerTestHarness(t)
+	chartDir := filepath.Join(h.cwd, "chart")
+	if err := os.MkdirAll(chartDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(chartDir, "Chart.yaml"), []byte(`apiVersion: v2
+name: cached
+version: 0.1.0
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := h.runner.loadChart(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{"values-a.yaml"},
+	}); err != nil {
+		t.Fatalf("loadChart() first call error = %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(chartDir, "Chart.yaml")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+
+	if _, err := h.runner.loadChart(context.Background(), Options{
+		Chart:       "chart",
+		ValuesFiles: []string{"values-b.yaml"},
+	}); err == nil {
+		t.Fatal("loadChart() second call error = nil, want miss with different values overrides")
 	}
 }
 

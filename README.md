@@ -62,17 +62,20 @@ helm-deep-pack upgrade --version 1.2.3 --yes
 ## Pull command
 
 ```bash
-helm-deep-pack pull CHART [--repo REPO] [--version VERSION] [--output-dir DIR] [--concurrency N] [--allow-insecure-http]
+helm-deep-pack pull CHART [--repo REPO] [--version VERSION] [--output-dir DIR] [--concurrency N] [--values FILE]... [--set KEY=VALUE]... [--allow-insecure-http]
 ```
 
 - `CHART` can be a chart name, local chart path, or `oci://...` reference.
 - `--repo` is HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP chart repositories.
+- Use `--values`/`-f` and `--set` to render deployment-specific variants that expose optional image references.
+- The tool extracts images from the rendered manifests you request; it does not enumerate every possible template permutation automatically.
 
 Examples:
 
 ```bash
 helm-deep-pack pull ./charts/my-local-chart
 helm-deep-pack pull oci://registry.example.com/charts/mychart --version 1.2.3
+helm-deep-pack pull mychart --repo https://charts.example.com -f values-prod.yaml --set sidecar.enabled=true
 ```
 
 ## Push command

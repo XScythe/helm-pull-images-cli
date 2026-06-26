@@ -102,7 +102,13 @@ func (r Runner) setCachedChart(opts Options, chrt loadedChart) {
 }
 
 func cacheKeyForOptions(opts Options) string {
-	return strings.Join([]string{opts.Repo, opts.Chart, opts.Version}, "\x00")
+	return strings.Join([]string{
+		opts.Repo,
+		opts.Chart,
+		opts.Version,
+		strings.Join(opts.ValuesFiles, "\x1f"),
+		strings.Join(opts.SetValues, "\x1f"),
+	}, "\x00")
 }
 
 func localChartSource(_ context.Context, opts Options) (loadedChart, error) {

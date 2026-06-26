@@ -630,7 +630,7 @@ func TestCopyImageToRegistryAllowInsecureHTTPUsesHTTPReference(t *testing.T) {
 
 	var gotScheme string
 	writeRemoteImage = func(ref name.Reference, _ v1.Image, _ ...remote.Option) error {
-		gotScheme = ref.Context().Registry.Scheme()
+		gotScheme = ref.Context().Scheme()
 		return nil
 	}
 

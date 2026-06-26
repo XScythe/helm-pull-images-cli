@@ -204,7 +204,7 @@ func TestClassifyImagesAllowInsecureHTTPUsesHTTPReference(t *testing.T) {
 	specDigest := "sha256:" + strings.Repeat("a", 64)
 	var gotScheme string
 	headFn := func(ref name.Reference, opts ...remote.Option) (*v1.Descriptor, error) {
-		gotScheme = ref.Context().Registry.Scheme()
+		gotScheme = ref.Context().Scheme()
 		return nil, fmt.Errorf("manifest unknown: manifest_unknown")
 	}
 

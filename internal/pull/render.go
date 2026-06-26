@@ -10,6 +10,7 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/engine"
 	"helm.sh/helm/v3/pkg/releaseutil"
+	"helm.sh/helm/v3/pkg/strvals"
 )
 
 func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, error) {
@@ -19,7 +20,12 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 	}
 	chrt := loaded.Chart
 
-	if err := chartutil.ProcessDependenciesWithMerge(chrt, chartutil.Values{}); err != nil {
+	userValues, err := renderUserValues(opts)
+	if err != nil {
+		return "", err
+	}
+
+	if err := chartutil.ProcessDependenciesWithMerge(chrt, chartutil.Values(userValues)); err != nil {
 		return "", err
 	}
 
@@ -29,7 +35,7 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 	// metadata. Users cannot customize these values.
 	renderValues, err := chartutil.ToRenderValuesWithSchemaValidation(
 		chrt,
-		map[string]interface{}{},
+		userValues,
 		chartutil.ReleaseOptions{
 			Name:      "mirror",
 			Namespace: "default",
@@ -66,6 +72,26 @@ func (r Runner) renderChartManifest(ctx context.Context, opts Options) (string, 
 		fmt.Fprintf(&out, "---\n# Source: %s\n%s\n", manifest.Name, manifest.Content)
 	}
 	return out.String(), nil
+}
+
+func renderUserValues(opts Options) (map[string]interface{}, error) {
+	merged := map[string]interface{}{}
+
+	for _, valuesFile := range opts.ValuesFiles {
+		fileValues, err := chartutil.ReadValuesFile(valuesFile)
+		if err != nil {
+			return nil, fmt.Errorf("read values file %q: %w", valuesFile, err)
+		}
+		merged = chartutil.MergeTables(fileValues, merged)
+	}
+
+	for _, setExpr := range opts.SetValues {
+		if err := strvals.ParseInto(setExpr, merged); err != nil {
+			return nil, fmt.Errorf("parse --set %q: %w", setExpr, err)
+		}
+	}
+
+	return merged, nil
 }
 
 func removeNotesTemplates(renderedFiles map[string]string) {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestPullCmd_FlagsRegistered(t *testing.T) {
-	flags := []string{"repo", "version", "output-dir", "concurrency", "allow-insecure-http", "verbose"}
+	flags := []string{"repo", "version", "output-dir", "concurrency", "values", "set", "allow-insecure-http", "verbose"}
 	for _, flag := range flags {
 		AssertFlagExists(t, pullCmd, flag)
 	}
@@ -28,6 +29,7 @@ func TestPullCmd_FlagShorthands(t *testing.T) {
 		"version":             "v",
 		"output-dir":          "o",
 		"concurrency":         "c",
+		"values":              "f",
 		"allow-insecure-http": "k",
 		"verbose":             "V",
 	}
@@ -46,6 +48,8 @@ func TestPullCmd_FlagTypes(t *testing.T) {
 		"version":             "string",
 		"output-dir":          "string",
 		"concurrency":         "int",
+		"values":              "stringArray",
+		"set":                 "stringArray",
 		"allow-insecure-http": "bool",
 		"verbose":             "bool",
 	}
@@ -60,6 +64,8 @@ func TestPullCmd_FlagDefaults(t *testing.T) {
 		"version":             "",
 		"output-dir":          "",
 		"concurrency":         "4",
+		"values":              "[]",
+		"set":                 "[]",
 		"allow-insecure-http": "false",
 		"verbose":             "false",
 	}
@@ -302,6 +308,31 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 			want: pullpkg.Options{Chart: "nginx", Concurrency: 8},
 		},
 		{
+			name: "with one values file",
+			args: []string{"nginx", "--values", "values.yaml"},
+			want: pullpkg.Options{Chart: "nginx", Concurrency: 4, ValuesFiles: []string{"values.yaml"}},
+		},
+		{
+			name: "with ordered values files",
+			args: []string{"nginx", "-f", "values-a.yaml", "-f", "values-b.yaml"},
+			want: pullpkg.Options{Chart: "nginx", Concurrency: 4, ValuesFiles: []string{"values-a.yaml", "values-b.yaml"}},
+		},
+		{
+			name: "with set overrides",
+			args: []string{"nginx", "--set", "image.tag=v2", "--set", "sidecar.enabled=true"},
+			want: pullpkg.Options{Chart: "nginx", Concurrency: 4, SetValues: []string{"image.tag=v2", "sidecar.enabled=true"}},
+		},
+		{
+			name: "with values and set",
+			args: []string{"nginx", "-f", "values.yaml", "--set", "image.tag=v3"},
+			want: pullpkg.Options{
+				Chart:       "nginx",
+				Concurrency: 4,
+				ValuesFiles: []string{"values.yaml"},
+				SetValues:   []string{"image.tag=v3"},
+			},
+		},
+		{
 			name: "all flags",
 			args: []string{
 				"nginx",
@@ -309,6 +340,8 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 				"-v", "14.0.0",
 				"-o", "/tmp/nginx-mirror",
 				"-c", "8",
+				"-f", "values.yaml",
+				"--set", "image.tag=v2",
 				"-V",
 			},
 			want: pullpkg.Options{
@@ -317,6 +350,8 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 				Version:     "14.0.0",
 				OutputDir:   "/tmp/nginx-mirror",
 				Concurrency: 8,
+				ValuesFiles: []string{"values.yaml"},
+				SetValues:   []string{"image.tag=v2"},
 			},
 		},
 		{
@@ -359,7 +394,7 @@ func TestPullCmd_FlagsMapToOptions(t *testing.T) {
 			if !capture.called {
 				t.Fatal("expected workflow to be invoked, it was not")
 			}
-			if capture.opts != tt.want {
+			if !reflect.DeepEqual(capture.opts, tt.want) {
 				t.Fatalf("Options mismatch:\n got  %+v\n want %+v", capture.opts, tt.want)
 			}
 		})

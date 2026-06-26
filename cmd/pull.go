@@ -16,6 +16,8 @@ var (
 	pullVersion     string
 	pullOutputDir   string
 	pullConcurrency int
+	pullValuesFiles []string
+	pullSetValues   []string
 	pullAllowHTTP   bool
 	pullVerbose     bool
 )
@@ -69,6 +71,8 @@ var pullCmd = &cobra.Command{
 			"repo", pullRepo,
 			"version", pullVersion,
 			"concurrency", pullConcurrency,
+			"values_files", len(pullValuesFiles),
+			"set_overrides", len(pullSetValues),
 		)
 
 		return pullRun(cmd.Context(), pull.Options{
@@ -77,6 +81,8 @@ var pullCmd = &cobra.Command{
 			Version:     pullVersion,
 			OutputDir:   pullOutputDir,
 			Concurrency: pullConcurrency,
+			ValuesFiles: pullValuesFiles,
+			SetValues:   pullSetValues,
 		}, cmd.ErrOrStderr())
 	},
 }
@@ -86,6 +92,8 @@ func init() {
 	pullCmd.Flags().StringVarP(&pullVersion, "version", "v", "", "Helm chart version")
 	pullCmd.Flags().StringVarP(&pullOutputDir, "output-dir", "o", "", "Directory for OCI layout artifacts and script")
 	pullCmd.Flags().IntVarP(&pullConcurrency, "concurrency", "c", 4, "Number of images to fetch and stage concurrently")
+	pullCmd.Flags().StringArrayVarP(&pullValuesFiles, "values", "f", nil, "Specify values in a YAML file (can specify multiple)")
+	pullCmd.Flags().StringArrayVar(&pullSetValues, "set", nil, "Set values on the command line (can specify multiple: key1=val1,key2=val2)")
 	pullCmd.Flags().BoolVarP(&pullAllowHTTP, "allow-insecure-http", "k", false, "Allow plaintext HTTP for Helm repository URLs")
 	pullCmd.Flags().BoolVarP(&pullVerbose, "verbose", "V", false, "Enable verbose logging")
 }

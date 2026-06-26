@@ -32,6 +32,8 @@ type Options struct {
 	Version     string
 	OutputDir   string
 	Concurrency int
+	ValuesFiles []string
+	SetValues   []string
 }
 
 type PullResult struct {
