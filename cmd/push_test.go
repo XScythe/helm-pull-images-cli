@@ -59,14 +59,29 @@ func TestPushCmd_FlagDefaults(t *testing.T) {
 	}
 }
 
-func TestPushCmd_RegistryArgRequired(t *testing.T) {
+func TestPushCmd_RegistryArgOptional(t *testing.T) {
+	capture, restore := spyPushRun(nil)
+	defer restore()
+
+	output := ExecuteCommand(pushCmd, []string{})
+	if output.Err != nil {
+		t.Fatalf("expected zero-arg push to be accepted, got: %v", output.Err)
+	}
+	if !capture.called {
+		t.Fatal("expected workflow to be invoked when registry argument is omitted")
+	}
+	if capture.opts.Registry != "" {
+		t.Fatalf("expected empty registry passed to workflow, got %q", capture.opts.Registry)
+	}
+}
+
+func TestPushCmd_RegistryArgMissingNonInteractive(t *testing.T) {
 	output := ExecuteCommand(pushCmd, []string{})
 	if output.Err == nil {
-		t.Fatalf("expected error when registry argument is missing, got none")
+		t.Fatalf("expected error when registry is missing in a non-interactive context, got none")
 	}
-	errOutput := output.Stderr + output.Stdout
-	if !strings.Contains(errOutput, "arg(s)") && !strings.Contains(errOutput, "received 0") {
-		t.Fatalf("error message should mention missing args, got: %s", errOutput)
+	if !strings.Contains(combinedErrorText(output), "registry") {
+		t.Fatalf("error should be attributable to the missing registry, got: %s", combinedErrorText(output))
 	}
 }
 

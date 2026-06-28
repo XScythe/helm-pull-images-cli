@@ -41,6 +41,37 @@ func TestNewCommand_MapsArgsAndFlagsToOptions(t *testing.T) {
 	}
 }
 
+func TestNewCommand_OptionalRegistryAllowsZeroArgs(t *testing.T) {
+	state := State{Concurrency: 4}
+	var called bool
+	var got push.Options
+
+	cmd := NewCommand(Config{
+		Use:              "push [REGISTRY]",
+		OptionalRegistry: true,
+		State:            &state,
+		Run: func(_ context.Context, opts push.Options, _ ...io.Writer) error {
+			called = true
+			got = opts
+			return nil
+		},
+	})
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !called {
+		t.Fatalf("expected run to be called")
+	}
+	if got.Registry != "" {
+		t.Fatalf("expected empty registry when omitted, got %q", got.Registry)
+	}
+}
+
 func TestNewCommand_ValidatesInputs(t *testing.T) {
 	state := State{Concurrency: 4}
 	cmd := NewCommand(Config{

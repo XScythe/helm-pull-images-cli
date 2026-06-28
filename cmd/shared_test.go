@@ -64,6 +64,7 @@ func ExecuteCommand(cmd *cobra.Command, args []string) *CapturedOutput {
 
 	execCmd.SetOut(stdout)
 	execCmd.SetErr(stderr)
+	execCmd.SetIn(new(bytes.Buffer))
 	execCmd.SetArgs(args)
 	err := execCmd.Execute()
 	execCmd.SetOut(origOut)

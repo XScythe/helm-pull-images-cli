@@ -81,11 +81,15 @@ helm-deep-pack pull mychart --repo https://charts.example.com -f values-prod.yam
 ## Push command
 
 ```bash
-helm-deep-pack push REGISTRY [--input-dir DIR] [--concurrency N] [--all] [--allow-insecure-http]
+helm-deep-pack push [REGISTRY] [--input-dir DIR] [--concurrency N] [--all] [--allow-insecure-http]
 ```
 
 - `REGISTRY` accepts a host (`registry.internal:5000`) or host plus namespace path
   (`registry.internal:5000/team/sub`). Images are pushed to `<REGISTRY>/<target>`.
+- `REGISTRY` is optional: when omitted in an interactive terminal, `push` prompts
+  for it (re-prompting until a valid registry is entered). In non-interactive
+  contexts (for example CI or piped input), the registry must be supplied as the
+  argument, otherwise `push` exits with an error.
 - Registry connections use HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP registries (for example local test registries).
 
 When run in a terminal, `push` is interactive by default so you can choose which images to mirror.

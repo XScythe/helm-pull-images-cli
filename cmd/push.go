@@ -17,8 +17,9 @@ var (
 var pushRun = push.PushImages
 
 var pushCmd = pushcli.NewCommand(pushcli.Config{
-	Use:   "push REGISTRY",
-	Short: "Push mirrored images from generated OCI layout artifacts",
+	Use:              "push [REGISTRY]",
+	Short:            "Push mirrored images from generated OCI layout artifacts",
+	OptionalRegistry: true,
 	Run: func(ctx context.Context, opts push.Options, status ...io.Writer) error {
 		return pushRun(ctx, opts, status...)
 	},

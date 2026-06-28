@@ -62,6 +62,13 @@ func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
 }
 
 func pushImages(ctx context.Context, opts Options, probeClient *http.Client, status ...io.Writer) error {
+	if opts.Registry == "" {
+		resolved, err := promptForRegistry(opts.In, opts.Out)
+		if err != nil {
+			return err
+		}
+		opts.Registry = resolved
+	}
 	if err := validation.ValidateImageRegistryWithPath("registry argument", opts.Registry); err != nil {
 		return fmt.Errorf("validate registry argument: %w", err)
 	}
