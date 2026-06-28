@@ -10,6 +10,8 @@ OUTPUT_PATH="${REPO_ROOT}/internal/pushbin/push_images_${GOOS_VALUE}_${GOARCH_VA
 
 echo "building embedded push binary for ${GOOS_VALUE}/${GOARCH_VALUE} -> ${OUTPUT_PATH}"
 
+rm -f "${OUTPUT_PATH}"
+
 CGO_ENABLED=0 GOOS="${GOOS_VALUE}" GOARCH="${GOARCH_VALUE}" \
   go build -trimpath \
   -ldflags="-s -w -X helm-deep-pack/cmd/pushimages.version=${VERSION_VALUE}" \

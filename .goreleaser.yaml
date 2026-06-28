@@ -12,7 +12,11 @@ builds:
     binary: helm-deep-pack
     hooks:
       pre:
-        - GOOS={{ .Os }} GOARCH={{ .Arch }} VERSION={{ .Version }} ./scripts/build-push-embed.sh
+        - cmd: ./scripts/build-push-embed.sh
+          env:
+            - GOOS={{ .Os }}
+            - GOARCH={{ .Arch }}
+            - VERSION={{ .Version }}
     env:
       - CGO_ENABLED=0
     flags:
