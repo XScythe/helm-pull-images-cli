@@ -78,6 +78,22 @@ helm-deep-pack pull oci://registry.example.com/charts/mychart --version 1.2.3
 helm-deep-pack pull mychart --repo https://charts.example.com -f values-prod.yaml --set sidecar.enabled=true
 ```
 
+## Add command
+
+```bash
+helm-deep-pack add IMAGE... [--output-dir DIR] [--concurrency N] [--verbose]
+```
+
+- Adds extra container images to an **existing** pull output directory (run `pull` first).
+  It appends them into the OCI layout and updates `push_images.json`.
+- `IMAGE...` are one or more image references, e.g. `nginx:1.27` or `redis@sha256:...`.
+- `--output-dir` defaults to the current directory; point it at the dir created by `pull`.
+- Images already present are skipped; only new images are fetched and staged.
+
+```bash
+helm-deep-pack add busybox:1.36 alpine:3.20 --output-dir ./prometheus-node-exporter
+```
+
 ## Push command
 
 ```bash
@@ -130,6 +146,7 @@ helm registry login registry.example.com
 helm-deep-pack --help
 helm-deep-pack --version
 helm-deep-pack pull --help
+helm-deep-pack add --help
 helm-deep-pack push --help
 helm-deep-pack upgrade --help
 ```

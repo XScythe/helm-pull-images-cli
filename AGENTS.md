@@ -17,6 +17,8 @@ the two lifecycle phases the tool supports: **pull** (render + stage) and **push
   and calls `pull.Run()`.
 - `cmd/push.go` — `push REGISTRY [flags]`: Takes registry as positional argument; calls
   `push.PushImages()` with the registry from `args[0]`.
+- `cmd/add.go` — `add IMAGE... [flags]`: Takes one or more image references as positional
+  args; builds `add.Options` and calls `add.Run()` to stage them into an existing pull dir.
 - `cmd/root.go` wires subcommands and exposes `commandLogger(verbose bool) *slog.Logger`,
   a small helper that returns a stderr `slog` logger at Debug level when `--verbose`
   is set, otherwise Info. There is no central Config/DI struct.
@@ -32,6 +34,11 @@ the two lifecycle phases the tool supports: **pull** (render + stage) and **push
     substituted in `runner_test.go` to drive the workflow without Helm/registry/network.
     Keep them as fields — don't collapse them into direct calls (they are real seams,
     not hypothetical ones).
+- `internal/add/` — Add workflow: stages user-supplied image references into an
+  existing pull output dir. Reads the existing `push_images.json`, dedupes against
+  it, calls `push.ArchiveImages` to append into the layout, and rewrites the manifest.
+  - `add.go` — public API (`Run`, `Runner`, `NewRunner`, `Options`) with the same
+    function-field test seams as pull. Errors if no manifest exists (augments only).
 - `internal/push/` — Transfer engine: stages images into an OCI layout
   (`ArchiveImages`) and pushes them to a registry with bounded concurrency
   (`PushImages`), plus progress reporting and self-binary copy helpers.
@@ -46,7 +53,7 @@ the two lifecycle phases the tool supports: **pull** (render + stage) and **push
 - `internal/validation/` — Reusable validators for flags and inputs.
 
 Package dependency direction (no cycles): `pull` → `push`, `pushspec`;
-`push` → `pushspec`; `pushspec` → stdlib + go-containerregistry `name`.
+`add` → `push`, `pushspec`; `push` → `pushspec`; `pushspec` → stdlib + go-containerregistry `name`.
 
 ## Best Practices & Patterns
 
@@ -134,6 +141,7 @@ output := ExecuteCommand(pushCmd, []string{"docker.io", "--concurrency", "4"})
 - `go vet ./...` — Vet
 - `go run . --help` — Help
 - `go run . pull nginx --verbose` — Pull with verbose logging
+- `go run . add busybox:1.36 -o ./out` — Add images to an existing pull dir
 - `go test ./... -run TestName` — Run a focused test
 
 ## Notes

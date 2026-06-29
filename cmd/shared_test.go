@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	addpkg "helm-deep-pack/internal/add"
 	pullpkg "helm-deep-pack/internal/pull"
 	pushpkg "helm-deep-pack/internal/push"
 
@@ -35,7 +36,7 @@ func ExecuteCommand(cmd *cobra.Command, args []string) *CapturedOutput {
 	if targetCmd == "helm-deep-pack" && len(args) > 0 {
 		targetCmd = args[0]
 	}
-	if targetCmd == "pull" || targetCmd == "push" {
+	if targetCmd == "pull" || targetCmd == "push" || targetCmd == "add" {
 		resetCmdVars(targetCmd)
 		defer resetCmdVars(targetCmd)
 	}
@@ -151,6 +152,27 @@ func spyPullRun(retErr error) (*pullCapture, func()) {
 	}
 }
 
+type addCapture struct {
+	called bool
+	opts   addpkg.Options
+}
+
+func spyAddRun(retErr error) (*addCapture, func()) {
+	resetCmdVars("add")
+	capture := &addCapture{}
+	orig := addRun
+	addRun = func(_ context.Context, opts addpkg.Options, _ ...io.Writer) error {
+		capture.called = true
+		capture.opts = opts
+		return retErr
+	}
+
+	return capture, func() {
+		addRun = orig
+		resetCmdVars("add")
+	}
+}
+
 type pushCapture struct {
 	called bool
 	opts   pushpkg.Options
@@ -183,6 +205,11 @@ func resetCmdVars(cmdName string) {
 		pullValuesFiles = nil
 		pullSetValues = nil
 		pullVerbose = false
+	case "add":
+		addImages = nil
+		addOutputDir = ""
+		addConcurrency = 4
+		addVerbose = false
 	case "push":
 		pushState.Registry = ""
 		pushState.InputDir = ""

@@ -205,3 +205,15 @@ func ValidateVersion(name, value string) error {
 	// The actual version resolution happens at runtime when fetching the chart.
 	return nil
 }
+
+// ValidateImage checks that a string is a valid container image reference.
+// Delegates to go-containerregistry's name.ParseReference.
+func ValidateImage(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	if _, err := containername.ParseReference(value); err != nil {
+		return fmt.Errorf("%s is not a valid image reference %q: %w", name, value, err)
+	}
+	return nil
+}

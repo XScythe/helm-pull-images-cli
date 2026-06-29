@@ -59,6 +59,7 @@ func init() {
 		cmd.SilenceUsage = true
 	}
 	rootCmd.AddCommand(pullCmd)
+	rootCmd.AddCommand(addCmd)
 	rootCmd.AddCommand(pushCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(upgradeHelperCmd)

@@ -264,3 +264,30 @@ func TestSplitRegistryPath(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateImage(t *testing.T) {
+	tests := []struct {
+		name            string
+		value           string
+		wantErr         bool
+		wantErrContains string
+	}{
+		{"valid tag", "nginx:1.27", false, ""},
+		{"valid digest", "docker.io/library/redis@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", false, ""},
+		{"empty", "", true, "must not be empty"},
+		{"uppercase rejected", "UPPERCASE:TAG", true, "not a valid image reference"},
+		{"bad digest format", "image@digest", true, "not a valid image reference"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateImage("test", tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateImage() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+				t.Errorf("ValidateImage() error = %v, want to contain %q", err, tt.wantErrContains)
+			}
+		})
+	}
+}
