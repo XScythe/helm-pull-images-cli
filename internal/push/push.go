@@ -66,7 +66,21 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 	}
 	registryHost, _ := validation.SplitRegistryPath(opts.Registry)
 	if err := preflightRegistry(ctx, registryHost, opts.AllowInsecureHTTP, probeClient); err != nil {
-		return fmt.Errorf("preflight registry argument: %w", err)
+		var httpErr *plainHTTPRegistryError
+		if !errors.As(err, &httpErr) || opts.AllowInsecureHTTP || !isInteractive(opts.In, opts.Out) {
+			return fmt.Errorf("preflight registry argument: %w", err)
+		}
+		confirmed, confirmErr := confirmInsecureHTTP(opts.In, opts.Out, registryHost)
+		if confirmErr != nil {
+			return fmt.Errorf("confirm insecure http: %w", confirmErr)
+		}
+		if !confirmed {
+			return fmt.Errorf("preflight registry argument: %w", err)
+		}
+		opts.AllowInsecureHTTP = true
+		if err := preflightRegistry(ctx, registryHost, true, probeClient); err != nil {
+			return fmt.Errorf("preflight registry argument: %w", err)
+		}
 	}
 	destRegistry := strings.TrimRight(opts.Registry, "/")
 
@@ -180,10 +194,7 @@ func preflightRegistry(ctx context.Context, registry string, allowInsecureHTTP b
 	resp, err := probeClient.Do(req)
 	if err != nil {
 		if !allowInsecureHTTP && isHTTPServerOnHTTPSProbe(err) {
-			return fmt.Errorf(
-				"registry %q appears to serve plain HTTP, but push defaults to HTTPS; re-run with --allow-insecure-http for HTTP registries",
-				registry,
-			)
+			return &plainHTTPRegistryError{registry: registry}
 		}
 		return fmt.Errorf("registry %q is not reachable: %w", registry, err)
 	}
@@ -402,6 +413,54 @@ func confirmConflictSelection(in io.Reader, out io.Writer, conflicts []classifie
 	}
 }
 
+// confirmInsecureHTTP warns that the registry serves plain HTTP and asks whether
+// to continue over HTTP anyway. It defaults to no: an empty answer, "no", or EOF
+// declines, so an accidental Enter never opts into insecure transport.
+func confirmInsecureHTTP(in io.Reader, out io.Writer, registry string) (bool, error) {
+	if in == nil {
+		return false, fmt.Errorf("missing input stream")
+	}
+	if out == nil {
+		out = io.Discard
+	}
+
+	yellow := ""
+	reset := ""
+	if progress.IsTerminalWriter(out) {
+		yellow = "\x1b[33m"
+		reset = "\x1b[0m"
+	}
+
+	if _, err := fmt.Fprintf(out, "%swarning:%s registry %q appears to serve plain HTTP, not HTTPS.\n", yellow, reset, registry); err != nil {
+		return false, err
+	}
+
+	reader := bufio.NewReader(in)
+	for {
+		if _, err := fmt.Fprint(out, "Continue over insecure HTTP? [y/N]: "); err != nil {
+			return false, err
+		}
+		response, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return false, err
+		}
+
+		switch strings.ToLower(strings.TrimSpace(response)) {
+		case "yes", "y":
+			return true, nil
+		case "no", "n", "":
+			return false, nil
+		}
+
+		if _, writeErr := fmt.Fprintln(out, "Please type yes or no."); writeErr != nil {
+			return false, writeErr
+		}
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+	}
+}
+
 func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry string, allowInsecureHTTP bool, layoutPath layout.Path, sourceImage, target, ociDigest string) error {
 	if _, err := name.ParseReference(sourceImage); err != nil {
 		return fmt.Errorf("parse source image %q: %w", sourceImage, err)
@@ -436,6 +495,20 @@ func copyImageToRegistryUsingGoContainerRegistry(ctx context.Context, registry s
 	}
 
 	return nil
+}
+
+// plainHTTPRegistryError signals that an HTTPS preflight probe found a registry
+// serving plain HTTP. It is a distinct type so callers can detect the case and,
+// when interactive, offer to continue over HTTP instead of failing outright.
+type plainHTTPRegistryError struct {
+	registry string
+}
+
+func (e *plainHTTPRegistryError) Error() string {
+	return fmt.Sprintf(
+		"registry %q appears to serve plain HTTP, but push defaults to HTTPS; re-run with --allow-insecure-http for HTTP registries",
+		e.registry,
+	)
 }
 
 func isHTTPServerOnHTTPSProbe(err error) bool {

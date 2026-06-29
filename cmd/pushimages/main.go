@@ -22,7 +22,7 @@ func logger(verbose bool) *slog.Logger {
 
 func main() {
 	cmd := pushcli.NewCommand(pushcli.Config{
-		Use:           "push_images REGISTRY",
+		Use:           "push_images [REGISTRY]",
 		Short:         "Push mirrored images from generated OCI layout artifacts",
 		Version:       version,
 		VersionFormat: "push_images {{.Version}}\n",

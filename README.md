@@ -106,7 +106,10 @@ helm-deep-pack push [REGISTRY] [--input-dir DIR] [--concurrency N] [--all] [--al
   for it (re-prompting until a valid registry is entered). In non-interactive
   contexts (for example CI or piped input), the registry must be supplied as the
   argument, otherwise `push` exits with an error.
-- Registry connections use HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP registries (for example local test registries).
+- Registry connections use HTTPS by default; use `--allow-insecure-http` only for intentionally plain-HTTP registries (for example local test registries). When the
+  target looks like a plain-HTTP registry and you are in an interactive terminal,
+  `push` warns and asks whether to continue over HTTP instead of failing outright;
+  in non-interactive contexts it still errors and points to `--allow-insecure-http`.
 
 When run in a terminal, `push` is interactive by default so you can choose which images to mirror.
 

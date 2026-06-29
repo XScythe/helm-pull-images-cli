@@ -75,7 +75,7 @@ func runPushHelperIfNeeded(args []string, in io.Reader, out, errOut io.Writer) (
 	}
 
 	cmd := pushcli.NewCommand(pushcli.Config{
-		Use:   "push_images REGISTRY",
+		Use:   "push_images [REGISTRY]",
 		Short: "Push mirrored images from generated OCI layout artifacts",
 		Run: func(ctx context.Context, opts push.Options, status ...io.Writer) error {
 			return pushRun(ctx, opts, status...)

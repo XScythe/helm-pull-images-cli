@@ -41,15 +41,14 @@ func TestNewCommand_MapsArgsAndFlagsToOptions(t *testing.T) {
 	}
 }
 
-func TestNewCommand_OptionalRegistryAllowsZeroArgs(t *testing.T) {
+func TestNewCommand_AllowsZeroArgs(t *testing.T) {
 	state := State{Concurrency: 4}
 	var called bool
 	var got push.Options
 
 	cmd := NewCommand(Config{
-		Use:              "push [REGISTRY]",
-		OptionalRegistry: true,
-		State:            &state,
+		Use:   "push [REGISTRY]",
+		State: &state,
 		Run: func(_ context.Context, opts push.Options, _ ...io.Writer) error {
 			called = true
 			got = opts

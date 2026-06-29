@@ -16,12 +16,19 @@ import (
 // was available to prompt on.
 var errRegistryRequired = errors.New("registry argument is required")
 
+// isInteractive reports whether both streams are terminals, i.e. we can safely
+// prompt the user rather than blocking on a read or writing to a non-tty. It is
+// a var so tests can drive the interactive branches without real terminals.
+var isInteractive = func(in io.Reader, out io.Writer) bool {
+	return in != nil && progress.IsTerminalReader(in) && out != nil && progress.IsTerminalWriter(out)
+}
+
 // promptForRegistry obtains a registry interactively when one was not supplied.
 // It mirrors selectImagesToPush: interaction requires a terminal on both input
 // and output; otherwise it fails fast (rather than blocking on a read) so
 // non-interactive callers get a clear, deterministic error.
 func promptForRegistry(in io.Reader, out io.Writer) (string, error) {
-	if in == nil || !progress.IsTerminalReader(in) || out == nil || !progress.IsTerminalWriter(out) {
+	if !isInteractive(in, out) {
 		return "", errRegistryRequired
 	}
 	return readRegistryLoop(in, out)

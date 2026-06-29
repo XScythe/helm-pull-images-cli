@@ -127,6 +127,34 @@ func TestRootCmd_VersionFlag(t *testing.T) {
 	}
 }
 
+func TestRunPushHelperIfNeeded_AllowsZeroArgsAndReachesWorkflow(t *testing.T) {
+	// Regression: the standalone helper must allow zero args so a no-arg launch
+	// (e.g. double-click) reaches the prompt-capable workflow instead of Cobra's
+	// ExactArgs "accepts 1 arg(s), received 0" rejection.
+	capture, restore := spyPushRun(nil)
+	defer restore()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	handled, err := runPushHelperIfNeeded([]string{"push_images"}, strings.NewReader(""), stdout, stderr)
+	if err != nil {
+		t.Fatalf("runPushHelperIfNeeded() error = %v", err)
+	}
+	if !handled {
+		t.Fatalf("runPushHelperIfNeeded() handled = false, want true")
+	}
+	if !capture.called {
+		t.Fatalf("expected push workflow to be reached with zero args")
+	}
+	if capture.opts.Registry != "" {
+		t.Fatalf("expected empty registry to be passed through for prompting, got %q", capture.opts.Registry)
+	}
+	combined := strings.ToLower(stdout.String() + stderr.String())
+	if strings.Contains(combined, "accepts 1 arg") {
+		t.Fatalf("regressed to ExactArgs rejection: %s", combined)
+	}
+}
+
 func TestIsPushHelperInvocation(t *testing.T) {
 	tests := []struct {
 		name  string

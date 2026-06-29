@@ -23,14 +23,13 @@ type State struct {
 type Runner func(ctx context.Context, opts push.Options, status ...io.Writer) error
 
 type Config struct {
-	Use              string
-	Short            string
-	OptionalRegistry bool
-	Version          string
-	VersionFormat    string
-	LoggerFactory    func(verbose bool) *slog.Logger
-	Run              Runner
-	State            *State
+	Use           string
+	Short         string
+	Version       string
+	VersionFormat string
+	LoggerFactory func(verbose bool) *slog.Logger
+	Run           Runner
+	State         *State
 }
 
 func NewCommand(cfg Config) *cobra.Command {
@@ -49,26 +48,19 @@ func NewCommand(cfg Config) *cobra.Command {
 
 	use := cfg.Use
 	if use == "" {
-		if cfg.OptionalRegistry {
-			use = "push [REGISTRY]"
-		} else {
-			use = "push REGISTRY"
-		}
+		use = "push [REGISTRY]"
 	}
 	short := cfg.Short
 	if short == "" {
 		short = "Push mirrored images from generated OCI layout artifacts"
 	}
 
-	argsValidator := cobra.ExactArgs(1)
-	if cfg.OptionalRegistry {
-		argsValidator = cobra.MaximumNArgs(1)
-	}
-
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: short,
-		Args:  argsValidator,
+		// The registry is optional: when omitted, the workflow prompts for it in
+		// an interactive terminal and otherwise fails fast.
+		Args: cobra.MaximumNArgs(1),
 		PreRunE: func(cmd *cobra.Command, args []string) error {
 			state.Registry = ""
 			if len(args) == 1 {
