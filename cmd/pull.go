@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -32,8 +31,8 @@ var pullCmd = &cobra.Command{
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		pullChart = args[0]
 
-		chartIsOCI := isOCIReference(pullChart)
-		repoIsOCI := isOCIReference(pullRepo)
+		chartIsOCI := validation.IsOCIReference(pullChart)
+		repoIsOCI := validation.IsOCIReference(pullRepo)
 
 		if chartIsOCI {
 			if err := validation.ValidateOCIRef("chart argument", pullChart); err != nil {
@@ -96,8 +95,4 @@ func init() {
 	pullCmd.Flags().StringArrayVar(&pullSetValues, "set", nil, "Set values on the command line (can specify multiple: key1=val1,key2=val2)")
 	pullCmd.Flags().BoolVarP(&pullAllowHTTP, "allow-insecure-http", "k", false, "Allow plaintext HTTP for Helm repository URLs")
 	pullCmd.Flags().BoolVarP(&pullVerbose, "verbose", "V", false, "Enable verbose logging")
-}
-
-func isOCIReference(value string) bool {
-	return strings.HasPrefix(strings.ToLower(value), "oci://")
 }

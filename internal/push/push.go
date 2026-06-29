@@ -72,6 +72,9 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 	if err := validation.ValidateImageRegistryWithPath("registry argument", opts.Registry); err != nil {
 		return fmt.Errorf("validate registry argument: %w", err)
 	}
+	if err := validation.ValidateConcurrency("--concurrency", opts.Concurrency); err != nil {
+		return fmt.Errorf("validate concurrency: %w", err)
+	}
 	registryHost, _ := validation.SplitRegistryPath(opts.Registry)
 	if err := preflightRegistry(ctx, registryHost, opts.AllowInsecureHTTP, probeClient); err != nil {
 		return fmt.Errorf("preflight registry argument: %w", err)

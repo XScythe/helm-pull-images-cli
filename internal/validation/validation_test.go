@@ -66,6 +66,29 @@ func TestValidateOCIRef(t *testing.T) {
 	}
 }
 
+func TestIsOCIReference(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{"oci lowercase", "oci://registry.example.com/charts/my-chart", true},
+		{"oci uppercase", "OCI://registry.example.com/charts/my-chart", true},
+		{"https url", "https://registry.example.com/charts", false},
+		{"plain chart", "my-chart", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsOCIReference(tt.value)
+			if got != tt.want {
+				t.Fatalf("IsOCIReference(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateChartName(t *testing.T) {
 	tests := []struct {
 		name            string

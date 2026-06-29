@@ -120,6 +120,21 @@ func TestPushImagesUsesManifestDigests(t *testing.T) {
 	}
 }
 
+func TestPushImagesRejectsInvalidConcurrency(t *testing.T) {
+	opts := Options{
+		Registry:    "docker.io",
+		Concurrency: 0,
+	}
+
+	err := pushImagesForTest(t, nil, opts)
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want concurrency validation error")
+	}
+	if !strings.Contains(err.Error(), "concurrency") {
+		t.Fatalf("PushImages() error = %v, want concurrency-related error", err)
+	}
+}
+
 func TestPushImagesUsesRegistryNamespacePathAsDestinationPrefix(t *testing.T) {
 	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
 		return registryProbeResponse(http.StatusOK, "application/json", ""), nil

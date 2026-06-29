@@ -67,6 +67,11 @@ func ValidateChartName(name, value string) error {
 	return nil
 }
 
+// IsOCIReference reports whether value uses the oci:// scheme.
+func IsOCIReference(value string) bool {
+	return strings.HasPrefix(strings.ToLower(value), "oci://")
+}
+
 var metadataNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 
 func validateMetadataName(name string) error {
@@ -81,7 +86,7 @@ func validateMetadataName(name string) error {
 //   - oci://registry.example.com/charts/mychart
 //   - oci://localhost:5000/charts/mychart:1.2.3
 func ValidateOCIRef(name, value string) error {
-	if !strings.HasPrefix(strings.ToLower(value), "oci://") {
+	if !IsOCIReference(value) {
 		return fmt.Errorf("%s must start with oci://: %q", name, value)
 	}
 
