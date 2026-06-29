@@ -3,6 +3,7 @@ package push
 import (
 	"bufio"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
@@ -128,7 +129,7 @@ func (m *selectModel) render() []string {
 		if m.registry != "" {
 			target = m.registry + "/" + target
 		}
-		body := normalizeDisplayImage(m.items[i].Spec.Image) + " → " + target
+		body := progress.NormalizeDisplayImage(m.items[i].Spec.Image) + " → " + target
 		status := ""
 		switch m.items[i].Status {
 		case statusPushable:
@@ -213,7 +214,7 @@ func readKey(r *bufio.Reader) (key, error) {
 }
 
 func viewportHeight(out io.Writer, count int) int {
-	if !isTerminalWriter(out) {
+	if !progress.IsTerminalWriter(out) {
 		return count
 	}
 	f := out.(*os.File)
@@ -237,7 +238,7 @@ func fitRenderLines(lines []string, width int) []string {
 	}
 	fitted := make([]string, len(lines))
 	for i, line := range lines {
-		fitted[i] = truncateForWidth(line, width-1)
+		fitted[i] = progress.TruncateForWidth(line, width-1)
 	}
 	return fitted
 }
@@ -322,7 +323,7 @@ func runSelect(in io.Reader, out io.Writer, items []classifiedImage, registry st
 	var inputFD int
 	hasRawTerminal := false
 	if f, ok := in.(*os.File); ok {
-		if isTerminalWriter(out) {
+		if progress.IsTerminalWriter(out) {
 			inputFD = int(f.Fd())
 			st, makeRawErr := term.MakeRaw(inputFD)
 			if makeRawErr != nil {
@@ -343,10 +344,10 @@ func runSelect(in io.Reader, out io.Writer, items []classifiedImage, registry st
 
 	br := bufio.NewReader(in)
 	lastLines := 0
-	colorOutput := isTerminalWriter(out)
+	colorOutput := progress.IsTerminalWriter(out)
 
 	for {
-		lines := fitRenderLines(model.render(), terminalWidth(out))
+		lines := fitRenderLines(model.render(), progress.TerminalWidth(out))
 		if colorOutput {
 			lines = colorizeRenderLines(lines, model)
 		}

@@ -14,6 +14,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
@@ -21,11 +22,13 @@ func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 	originalWriteLayout := writeLayout
 	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
+	originalWrite := writeLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
 		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
+		writeLayoutImage = originalWrite
 	}()
 
 	fetchRemoteImage = func(ref name.Reference, _ ...remote.Option) (v1.Image, error) {
@@ -45,6 +48,7 @@ func TestArchiveImagesCreatesDigestSpecs(t *testing.T) {
 	}
 
 	var appended int
+	writeLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error {
 		appended++
 		return nil
@@ -101,11 +105,13 @@ func TestArchiveImagesSupportsDigestReferences(t *testing.T) {
 	originalWriteLayout := writeLayout
 	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
+	originalWrite := writeLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
 		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
+		writeLayoutImage = originalWrite
 	}()
 
 	var gotRef name.Reference
@@ -119,6 +125,7 @@ func TestArchiveImagesSupportsDigestReferences(t *testing.T) {
 	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
+	writeLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error {
 		return nil
 	}
@@ -141,11 +148,13 @@ func TestArchiveImagesAppendsToExistingLayout(t *testing.T) {
 	originalWriteLayout := writeLayout
 	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
+	originalWrite := writeLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
 		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
+		writeLayoutImage = originalWrite
 	}()
 
 	fetchRemoteImage = func(ref name.Reference, _ ...remote.Option) (v1.Image, error) {
@@ -162,6 +171,8 @@ func TestArchiveImagesAppendsToExistingLayout(t *testing.T) {
 	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
+	writeLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
+	writeLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 
 	out := t.TempDir()
@@ -186,11 +197,13 @@ func TestArchiveImagesReportsProgress(t *testing.T) {
 	originalWriteLayout := writeLayout
 	originalFromLayout := fromLayoutPath
 	originalAppend := appendLayoutImage
+	originalWrite := writeLayoutImage
 	defer func() {
 		fetchRemoteImage = originalFetch
 		writeLayout = originalWriteLayout
 		fromLayoutPath = originalFromLayout
 		appendLayoutImage = originalAppend
+		writeLayoutImage = originalWrite
 	}()
 
 	fetchRemoteImage = func(ref name.Reference, _ ...remote.Option) (v1.Image, error) {
@@ -205,6 +218,7 @@ func TestArchiveImagesReportsProgress(t *testing.T) {
 	fromLayoutPath = func(path string) (layout.Path, error) {
 		return layout.Path(path), nil
 	}
+	writeLayoutImage = func(_ layout.Path, _ v1.Image) error { return nil }
 	appendLayoutImage = func(_ layout.Path, _ v1.Image) error {
 		return nil
 	}
@@ -228,12 +242,59 @@ func TestArchiveImagesReportsProgress(t *testing.T) {
 }
 
 type fakeImage struct {
-	v1.Image
-	digest v1.Hash
+	digest   v1.Hash
+	manifest *v1.Manifest
 }
 
 func (f fakeImage) Digest() (v1.Hash, error) {
 	return f.digest, nil
+}
+
+func (f fakeImage) Manifest() (*v1.Manifest, error) {
+	return f.manifest, nil
+}
+
+func (f fakeImage) Layers() ([]v1.Layer, error) {
+	return nil, nil
+}
+
+func (f fakeImage) MediaType() (types.MediaType, error) {
+	return "", nil
+}
+
+func (f fakeImage) Size() (int64, error) {
+	if f.manifest == nil {
+		return 0, nil
+	}
+	total := f.manifest.Config.Size
+	for _, layer := range f.manifest.Layers {
+		total += layer.Size
+	}
+	return total, nil
+}
+
+func (f fakeImage) ConfigName() (v1.Hash, error) {
+	return v1.Hash{}, nil
+}
+
+func (f fakeImage) ConfigFile() (*v1.ConfigFile, error) {
+	return &v1.ConfigFile{}, nil
+}
+
+func (f fakeImage) RawConfigFile() ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (f fakeImage) RawManifest() ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (f fakeImage) LayerByDigest(v1.Hash) (v1.Layer, error) {
+	return nil, nil
+}
+
+func (f fakeImage) LayerByDiffID(v1.Hash) (v1.Layer, error) {
+	return nil, nil
 }
 
 func fakeImageWithDigest(t *testing.T, digest string) v1.Image {
@@ -242,5 +303,11 @@ func fakeImageWithDigest(t *testing.T, digest string) v1.Image {
 	if err != nil {
 		t.Fatalf("NewHash(%q): %v", digest, err)
 	}
-	return fakeImage{digest: hash}
+	return fakeImage{
+		digest: hash,
+		manifest: &v1.Manifest{
+			Config: v1.Descriptor{Size: 1024 * 1024},
+			Layers: []v1.Descriptor{{Size: 2 * 1024 * 1024}},
+		},
+	}
 }

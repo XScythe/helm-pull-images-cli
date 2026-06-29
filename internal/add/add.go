@@ -9,6 +9,7 @@ package add
 import (
 	"context"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"io"
 	"os"
 
@@ -41,7 +42,7 @@ func NewRunner() Runner {
 }
 
 func (r Runner) Run(ctx context.Context, opts Options, status ...io.Writer) error {
-	statusOut := statusWriter(status...)
+	statusOut := progress.StatusWriter(status...)
 
 	outputDir := opts.OutputDir
 	if outputDir == "" {
@@ -75,13 +76,6 @@ func (r Runner) Run(ctx context.Context, opts Options, status ...io.Writer) erro
 
 	_, _ = fmt.Fprintf(statusOut, "added %d image(s)\n", len(newSpecs))
 	return nil
-}
-
-func statusWriter(status ...io.Writer) io.Writer {
-	if len(status) > 0 && status[0] != nil {
-		return status[0]
-	}
-	return io.Discard
 }
 
 func dedupeImages(manifest *pushspec.PushManifest, incoming []string) []string {

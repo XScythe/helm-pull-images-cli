@@ -3,6 +3,7 @@ package pull
 import (
 	"context"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
@@ -17,17 +18,10 @@ func (r Runner) Run(ctx context.Context, opts Options, status ...io.Writer) erro
 	return nil
 }
 
-func statusWriter(status ...io.Writer) io.Writer {
-	if len(status) > 0 && status[0] != nil {
-		return status[0]
-	}
-	return io.Discard
-}
-
 func (r Runner) Execute(ctx context.Context, opts Options, status ...io.Writer) (result PullResult, err error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	statusOut := statusWriter(status...)
+	statusOut := progress.StatusWriter(status...)
 	outputDir := opts.OutputDir
 	defer func() {
 		if err == nil || outputDir == "" {

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"helm-deep-pack/internal/pushspec"
 	"helm-deep-pack/internal/validation"
 	"io"
@@ -43,18 +44,6 @@ type Options struct {
 	AllowInsecureHTTP bool
 	In                io.Reader
 	Out               io.Writer
-}
-
-func isTerminalReader(r io.Reader) bool {
-	f, ok := r.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func PushImages(ctx context.Context, opts Options, status ...io.Writer) error {
@@ -124,7 +113,7 @@ func pushImages(ctx context.Context, opts Options, probeClient *http.Client, sta
 // without pushing (terminal unavailable aside, this covers user cancellation,
 // an empty selection, or a declined conflict confirmation).
 func selectImagesToPush(ctx context.Context, opts Options, destRegistry string, specs []pushspec.ArchiveSpec) (selected []pushspec.ArchiveSpec, proceed bool, err error) {
-	if opts.In == nil || !isTerminalReader(opts.In) || opts.Out == nil || !isTerminalWriter(opts.Out) {
+	if opts.In == nil || !progress.IsTerminalReader(opts.In) || opts.Out == nil || !progress.IsTerminalWriter(opts.Out) {
 		return nil, false, fmt.Errorf("interactive selection requires terminal input and output; re-run with --all to push every image non-interactively")
 	}
 
@@ -230,16 +219,16 @@ func looksLikeWebsiteContent(contentType string, body []byte) bool {
 }
 
 func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, specs []pushspec.ArchiveSpec, concurrency int, allowInsecureHTTP bool, status ...io.Writer) error {
-	progress := newTransferProgress(statusWriter(status...), "pushing", len(specs))
-	defer progress.Finish()
+	progressTracker := progress.New(progress.StatusWriter(status...), "pushing", len(specs))
+	defer progressTracker.Finish()
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(normalizeConcurrency(concurrency))
 	for _, spec := range specs {
 		spec := spec
 		group.Go(func() error {
-			progress.Begin(spec.Image)
-			defer progress.End(spec.Image)
+			progressTracker.Begin(spec.Image)
+			defer progressTracker.End(spec.Image)
 
 			if err := copyImageToRegistry(groupCtx, registry, allowInsecureHTTP, layoutPath, spec.Image, spec.Target, spec.OCIDigest); err != nil {
 				return fmt.Errorf("push %s: %w", spec.Image, err)
@@ -360,7 +349,7 @@ func confirmConflictSelection(in io.Reader, out io.Writer, conflicts []classifie
 
 	orange := ""
 	reset := ""
-	if isTerminalWriter(out) {
+	if progress.IsTerminalWriter(out) {
 		orange = "\x1b[38;5;208m"
 		reset = "\x1b[0m"
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"io"
 	"strings"
 
@@ -20,7 +21,7 @@ var errRegistryRequired = errors.New("registry argument is required")
 // and output; otherwise it fails fast (rather than blocking on a read) so
 // non-interactive callers get a clear, deterministic error.
 func promptForRegistry(in io.Reader, out io.Writer) (string, error) {
-	if in == nil || !isTerminalReader(in) || out == nil || !isTerminalWriter(out) {
+	if in == nil || !progress.IsTerminalReader(in) || out == nil || !progress.IsTerminalWriter(out) {
 		return "", errRegistryRequired
 	}
 	return readRegistryLoop(in, out)

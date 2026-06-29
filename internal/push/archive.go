@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"helm-deep-pack/internal/progress"
 	"helm-deep-pack/internal/pushspec"
 	"io"
 	"os"
@@ -21,6 +22,9 @@ import (
 var fetchRemoteImage = remote.Image
 var writeLayout = layout.Write
 var fromLayoutPath = layout.FromPath
+var writeLayoutImage = func(path layout.Path, img v1.Image) error {
+	return path.WriteImage(img)
+}
 var appendLayoutImage = func(path layout.Path, img v1.Image) error {
 	return path.AppendImage(img)
 }
@@ -34,8 +38,8 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 	if err != nil {
 		return nil, fmt.Errorf("build archive specs: %w", err)
 	}
-	progress := newTransferProgress(statusWriter(status...), "pulling", len(specs))
-	defer progress.Finish()
+	progressTracker := progress.New(progress.StatusWriter(status...), "pulling", len(specs))
+	defer progressTracker.Finish()
 
 	layoutRoot := filepath.Join(outputDir, pushspec.OCILayoutDirName())
 	layoutPath, createdLayout, err := openOrCreateLayout(layoutRoot)
@@ -50,10 +54,10 @@ func ArchiveImages(ctx context.Context, images []string, outputDir string, concu
 	for i := range specs {
 		i := i
 		group.Go(func() error {
-			progress.Begin(specs[i].Image)
-			defer progress.End(specs[i].Image)
+			progressTracker.Begin(specs[i].Image)
+			defer progressTracker.End(specs[i].Image)
 
-			digest, copyErr := copyImageToLayoutUsingGoContainerRegistry(groupCtx, specs[i].Image, layoutPath, &writeMu)
+			digest, copyErr := copyImageToLayoutUsingGoContainerRegistry(groupCtx, specs[i].Image, layoutPath, &writeMu, progressTracker)
 			if copyErr != nil {
 				return fmt.Errorf("archive %s: %w", specs[i].Image, copyErr)
 			}
@@ -95,7 +99,7 @@ func openOrCreateLayout(layoutRoot string) (layout.Path, bool, error) {
 	return path, true, nil
 }
 
-func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string, layoutPath layout.Path, writeMu *sync.Mutex) (string, error) {
+func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string, layoutPath layout.Path, writeMu *sync.Mutex, progressTracker *progress.Progress) (string, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
 		return "", fmt.Errorf("parse source image %q: %w", image, err)
@@ -106,9 +110,26 @@ func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string
 		return "", fmt.Errorf("fetch source image %q: %w", image, err)
 	}
 
+	manifest, err := img.Manifest()
+	if err != nil {
+		return "", fmt.Errorf("read manifest for image %q: %w", image, err)
+	}
+
+	totalBytes := int64(0)
+	for _, layer := range manifest.Layers {
+		totalBytes += layer.Size
+	}
+	if progressTracker != nil {
+		progressTracker.Update(image, 0, totalBytes, "fetching")
+	}
+
 	digest, err := img.Digest()
 	if err != nil {
 		return "", fmt.Errorf("resolve digest for image %q: %w", image, err)
+	}
+
+	if err := writeLayoutImage(layoutPath, newProgressImage(image, img, totalBytes, progressTracker)); err != nil {
+		return "", fmt.Errorf("write image %q blobs to oci layout: %w", image, err)
 	}
 
 	writeMu.Lock()
@@ -118,6 +139,104 @@ func copyImageToLayoutUsingGoContainerRegistry(ctx context.Context, image string
 	}
 
 	return digest.String(), nil
+}
+
+type progressImage struct {
+	v1.Image
+	image    string
+	total    int64
+	progress *progress.Progress
+	counter  *progressCounter
+}
+
+func newProgressImage(image string, img v1.Image, total int64, progressTracker *progress.Progress) v1.Image {
+	if progressTracker == nil {
+		return img
+	}
+	return progressImage{
+		Image:    img,
+		image:    image,
+		total:    total,
+		progress: progressTracker,
+		counter:  &progressCounter{},
+	}
+}
+
+func (p progressImage) Layers() ([]v1.Layer, error) {
+	layers, err := p.Image.Layers()
+	if err != nil {
+		return nil, err
+	}
+	if p.progress == nil {
+		return layers, nil
+	}
+	wrapped := make([]v1.Layer, 0, len(layers))
+	for _, layer := range layers {
+		wrapped = append(wrapped, progressLayer{
+			Layer:    layer,
+			image:    p.image,
+			total:    p.total,
+			progress: p.progress,
+			counter:  p.counter,
+		})
+	}
+	return wrapped, nil
+}
+
+func (p progressImage) RawConfigFile() ([]byte, error) {
+	return p.Image.RawConfigFile()
+}
+
+type progressLayer struct {
+	v1.Layer
+	image    string
+	total    int64
+	progress *progress.Progress
+	counter  *progressCounter
+}
+
+func (p progressLayer) Compressed() (io.ReadCloser, error) {
+	rc, err := p.Layer.Compressed()
+	if err != nil {
+		return nil, err
+	}
+	if p.progress == nil {
+		return rc, nil
+	}
+	return &progressReadCloser{
+		ReadCloser: rc,
+		image:      p.image,
+		total:      p.total,
+		progress:   p.progress,
+		counter:    p.counter,
+	}, nil
+}
+
+type progressCounter struct {
+	mu       sync.Mutex
+	complete int64
+}
+
+type progressReadCloser struct {
+	io.ReadCloser
+	image    string
+	total    int64
+	progress *progress.Progress
+	counter  *progressCounter
+	complete int64
+}
+
+func (p *progressReadCloser) Read(buf []byte) (int, error) {
+	n, err := p.ReadCloser.Read(buf)
+	if n > 0 && p.progress != nil && p.counter != nil {
+		p.counter.mu.Lock()
+		p.counter.complete += int64(n)
+		p.complete = p.counter.complete
+		complete := p.counter.complete
+		p.counter.mu.Unlock()
+		p.progress.Update(p.image, complete, p.total, "downloading")
+	}
+	return n, err
 }
 
 func normalizeConcurrency(value int) int {
