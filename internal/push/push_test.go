@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"helm-deep-pack/internal/pushspec"
 	"io"
@@ -37,6 +38,22 @@ func registryProbeResponse(status int, contentType, body string) *http.Response 
 		headers.Set("Content-Type", contentType)
 	}
 	headers.Set("Docker-Distribution-Api-Version", "registry/2.0")
+
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     headers,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+// websiteProbeResponse builds a /v2/ probe response that lacks any Docker
+// Registry v2 signal, simulating a generic website rather than a registry.
+func websiteProbeResponse(status int, contentType, body string) *http.Response {
+	headers := make(http.Header)
+	if contentType != "" {
+		headers.Set("Content-Type", contentType)
+	}
 
 	return &http.Response{
 		StatusCode: status,
@@ -547,8 +564,11 @@ func TestPushImagesRejectsUnreachableRegistryBeforeSelection(t *testing.T) {
 }
 
 func TestPushImagesRejectsWebsiteLikeRegistryBeforeSelection(t *testing.T) {
+	// A generic website answers /v2/ with a non-registry status and an HTML body
+	// and carries no registry signal, so the preflight probe fails and the error
+	// is shaped into a friendly "looks like a website" message.
 	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
-		return registryProbeResponse(http.StatusOK, "text/html; charset=utf-8", "<!doctype html><html><body>hello</body></html>"), nil
+		return websiteProbeResponse(http.StatusNotFound, "text/html; charset=utf-8", "<!doctype html><html><body>hello</body></html>"), nil
 	})
 
 	err := pushImagesForTest(t, probeClient, Options{
@@ -564,6 +584,57 @@ func TestPushImagesRejectsWebsiteLikeRegistryBeforeSelection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "looks like a website") {
 		t.Fatalf("PushImages() error = %v, want website-like error", err)
+	}
+}
+
+func TestPushImagesAcceptsRegistryServingHTMLErrorBody(t *testing.T) {
+	// Quay answers the /v2/ probe with a 401, an HTML error body, and the
+	// canonical Docker-Distribution-Api-Version header. The registry signal must
+	// win over the website heuristic so the preflight does not reject it. The
+	// terminal-selection error here proves the preflight already passed.
+	resp := registryProbeResponse(http.StatusUnauthorized, "text/html; charset=utf-8", "true")
+	resp.Header.Set("Www-Authenticate", `Bearer realm="https://quay.io/v2/auth",service="quay.io"`)
+	probeClient := withRegistryProbeClient(t, func(*http.Request) (*http.Response, error) {
+		return resp, nil
+	})
+
+	originalLoadLayout := loadOCILayout
+	defer func() {
+		loadOCILayout = originalLoadLayout
+	}()
+	loadOCILayout = func(path string) (layout.Path, error) {
+		return layout.Path(path), nil
+	}
+
+	dir := t.TempDir()
+	manifest, err := pushspec.GeneratePushManifest([]pushspec.ArchiveSpec{{
+		Image:     "busybox:1.36",
+		Target:    "library/busybox:1.36",
+		OCIDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}})
+	if err != nil {
+		t.Fatalf("pushspec.GeneratePushManifest() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pushspec.PushManifestFileName()), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	err = pushImagesForTest(t, probeClient, Options{
+		Registry:    "quay.io",
+		InputDir:    dir,
+		Concurrency: 1,
+		All:         false,
+		In:          strings.NewReader(""),
+		Out:         &bytes.Buffer{},
+	})
+	if err == nil {
+		t.Fatal("PushImages() error = nil, want terminal selection error after successful preflight")
+	}
+	if strings.Contains(err.Error(), "looks like a website") {
+		t.Fatalf("PushImages() rejected registry serving HTML error body as a website: %v", err)
+	}
+	if !strings.Contains(err.Error(), "requires terminal input and output") {
+		t.Fatalf("PushImages() error = %v, want terminal selection error", err)
 	}
 }
 
@@ -686,10 +757,16 @@ func TestPushImagesSuggestsAllowInsecureHTTPFlagForHTTPRegistry(t *testing.T) {
 	}
 }
 
-func TestPushImagesAllowInsecureHTTPUsesHTTPPreflightProbe(t *testing.T) {
-	var probeURL string
+func TestPushImagesAllowInsecureHTTPProbesOverHTTP(t *testing.T) {
+	// With --allow-insecure-http the preflight, like the actual push, still
+	// attempts HTTPS first and falls back to HTTP, so an HTTP-only registry is
+	// reachable without TLS.
+	var schemes []string
 	probeClient := withRegistryProbeClient(t, func(req *http.Request) (*http.Response, error) {
-		probeURL = req.URL.String()
+		schemes = append(schemes, req.URL.Scheme)
+		if req.URL.Scheme == "https" {
+			return nil, errors.New(`Get "https://registry.local:5000/v2/": dial tcp: connection refused`)
+		}
 		return registryProbeResponse(http.StatusOK, "application/json", ""), nil
 	})
 
@@ -703,8 +780,18 @@ func TestPushImagesAllowInsecureHTTPUsesHTTPPreflightProbe(t *testing.T) {
 	if err == nil {
 		t.Fatal("PushImages() error = nil, want push manifest read error")
 	}
-	if probeURL != "http://registry.local:5000/v2/" {
-		t.Fatalf("registry probe URL = %q, want %q", probeURL, "http://registry.local:5000/v2/")
+	if strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("PushImages() error = %v, want to have passed preflight over HTTP", err)
+	}
+
+	probedHTTP := false
+	for _, scheme := range schemes {
+		if scheme == "http" {
+			probedHTTP = true
+		}
+	}
+	if !probedHTTP {
+		t.Fatalf("registry probe schemes = %v, want an http probe when --allow-insecure-http is set", schemes)
 	}
 }
 

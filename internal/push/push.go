@@ -25,6 +25,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -173,60 +174,56 @@ func selectImagesToPush(ctx context.Context, opts Options, destRegistry string, 
 	return selected, true, nil
 }
 
+const registryProbeTimeout = 5 * time.Second
+
 func newRegistryProbeClient() *http.Client {
-	return &http.Client{Timeout: 5 * time.Second}
+	return &http.Client{Timeout: registryProbeTimeout}
 }
 
-func preflightRegistry(ctx context.Context, registry string, allowInsecureHTTP bool, probeClient *http.Client) (err error) {
+// preflightRegistry verifies that the destination is a usable container registry
+// before any images are pushed. It delegates the reachability and registry
+// determination to go-containerregistry's transport.Ping — the same GET /v2/
+// probe the push path itself relies on, which understands the Docker Registry v2
+// status/auth-challenge contract (200, or 401 with a WWW-Authenticate challenge).
+// Local heuristics are only used to shape a friendlier error when Ping fails.
+func preflightRegistry(ctx context.Context, registry string, allowInsecureHTTP bool, probeClient *http.Client) error {
 	registry = strings.TrimRight(registry, "/")
-	scheme := "https"
+
+	ctx, cancel := context.WithTimeout(ctx, registryProbeTimeout)
+	defer cancel()
+
+	var opts []name.Option
 	if allowInsecureHTTP {
-		scheme = "http"
+		opts = append(opts, name.Insecure)
+	}
+	reg, err := name.NewRegistry(registry, opts...)
+	if err != nil {
+		return fmt.Errorf("parse registry %q: %w", registry, err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+registry+"/v2/", nil)
-	if err != nil {
-		return fmt.Errorf("build registry probe request: %w", err)
+	roundTripper := http.DefaultTransport
+	if probeClient != nil && probeClient.Transport != nil {
+		roundTripper = probeClient.Transport
 	}
-	if probeClient == nil {
-		probeClient = newRegistryProbeClient()
-	}
-	resp, err := probeClient.Do(req)
-	if err != nil {
+
+	if _, err := transport.Ping(ctx, reg, roundTripper); err != nil {
 		if !allowInsecureHTTP && isHTTPServerOnHTTPSProbe(err) {
 			return &plainHTTPRegistryError{registry: registry}
 		}
+		if looksLikeWebsite(err) {
+			return fmt.Errorf("registry %q is reachable but looks like a website, not an image registry", registry)
+		}
+		// A transport.Error means a server answered /v2/ but did not honour the
+		// registry API contract; anything else (dial failures, TLS errors, …)
+		// means the host could not be reached at all.
+		var transportErr *transport.Error
+		if errors.As(err, &transportErr) {
+			return fmt.Errorf("registry %q is reachable but did not expose the container registry API at /v2/: %w", registry, err)
+		}
 		return fmt.Errorf("registry %q is not reachable: %w", registry, err)
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close registry probe response: %w", closeErr)
-		}
-	}()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if err != nil {
-		return fmt.Errorf("read registry probe response: %w", err)
-	}
-	if looksLikeWebsiteContent(resp.Header.Get("Content-Type"), body) {
-		return fmt.Errorf("registry %q is reachable but looks like a website, not an image registry", registry)
-	}
-
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusUnauthorized, http.StatusForbidden:
-		return nil
-	default:
-		return fmt.Errorf("registry %q is reachable but did not expose the container registry API at /v2/ (status %s)", registry, resp.Status)
-	}
-}
-
-func looksLikeWebsiteContent(contentType string, body []byte) bool {
-	if strings.Contains(strings.ToLower(contentType), "text/html") {
-		return true
-	}
-
-	lowerBody := strings.ToLower(string(body))
-	return strings.Contains(lowerBody, "<!doctype html") || strings.Contains(lowerBody, "<html")
+	return nil
 }
 
 func pushSpecs(ctx context.Context, registry string, layoutPath layout.Path, specs []pushspec.ArchiveSpec, concurrency int, allowInsecureHTTP bool, status ...io.Writer) error {
